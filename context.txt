@@ -1,0 +1,57 @@
+※ 챗봇 사용을 위한 상용 LLM API_KEY 목록
+
+# GOOGLE_API_KEY LIST
+AIzaSyAfZvRn942clfFinljPLxwMr9GMb8yy1tA
+AIzaSyCmtYk2srxfW9rTAGWciZS48ns7QiivSjw
+
+# OpenAI API_KEY LIST
+
+# Claude API_KEY LIST
+
+
+--
+※ db_config.json에 사용할 DB 연결 템플릿
+
+# oracle
+{
+    "db_type": "oracle",
+    "connection": {
+        "host": "localhost",
+        "port": 1521,
+        "user": "your_username",
+        "password": "${DB_PASSWORD}",
+        "database": "your_service_name"
+    },
+    "schema_options": {
+        "owner": null,
+        "include_tables": [],
+        "exclude_tables": [],
+        "include_views": false
+    },
+    "cache": {
+        "enabled": true,
+        "ttl_seconds": 3600
+    }
+}
+
+# postgresql
+{
+    "db_type": "postgresql",
+    "connection": {
+        "host": "localhost",
+        "port": 5432,
+        "user": "your_username",
+        "password": "${DB_PASSWORD}",
+        "database": "your_database"
+    },
+    "schema_options": {
+        "owner": null,
+        "include_tables": [],
+        "exclude_tables": [],
+        "include_views": false
+    },
+    "cache": {
+        "enabled": true,
+        "ttl_seconds": 3600
+    }
+}

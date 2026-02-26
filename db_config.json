@@ -1,0 +1,20 @@
+{
+    "db_type": "postgresql",
+    "connection": {
+        "host": "aws-1-ap-northeast-2.pooler.supabase.com",
+        "port": 6543,
+        "user": "postgres.qxxqxgbmzsmjcxcmctgd",
+        "password": "@Kyalsms8850",
+        "database": "postgres"
+    },
+    "schema_options": {
+        "owner": null,
+        "include_tables": [],
+        "exclude_tables": [],
+        "include_views": false
+    },
+    "cache": {
+        "enabled": true,
+        "ttl_seconds": 3600
+    }
+}

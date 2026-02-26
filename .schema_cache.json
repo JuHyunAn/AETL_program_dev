@@ -1,0 +1,459 @@
+{
+  "tables": {
+    "tb_dbms_org": {
+      "columns": [
+        "ogr_cd",
+        "db_id",
+        "org_nm",
+        "upper_org_cd",
+        "upper_org_nm",
+        "info_sys_nm",
+        "db_nm",
+        "chk_req_cd",
+        "chr_result",
+        "info_sys_type",
+        "colt_expt_yn",
+        "REG_DTM"
+      ],
+      "pk": [
+        "ogr_cd",
+        "db_id"
+      ],
+      "fk": []
+    },
+    "tb_diag_aft_info": {
+      "columns": [
+        "VLINS_RSLT_UNIQ_ID",
+        "DIAG_AFT_NO",
+        "DBMS_NM",
+        "SCHEMA_NM",
+        "DIAG_TBL_NM",
+        "DIAG_CLMN_NM",
+        "RULST_NM",
+        "DIAG_RULE_NM",
+        "CARY_STS_NM",
+        "CARY_DT",
+        "RVIW_NO",
+        "RVIW_OPNN_CTNT",
+        "REG_DTM"
+      ],
+      "pk": [
+        "VLINS_RSLT_UNIQ_ID",
+        "DIAG_AFT_NO"
+      ],
+      "fk": []
+    },
+    "tb_diag_base_rslt": {
+      "columns": [
+        "VLINS_RSLT_UNIQ_ID",
+        "POS_DB_ID",
+        "REG_UNIQ_ID",
+        "DIAG_PRGM_NM",
+        "LAST_PROC_DT",
+        "ORG_NM",
+        "INFO_SYS_NM",
+        "DB_NM",
+        "DB_SYS_NM",
+        "DB_KIND_NM",
+        "DB_VER",
+        "DB_IP_NM",
+        "DB_PORT_NM",
+        "TGT_CTNT",
+        "TGT_CNT",
+        "TGT_TOT_CNT",
+        "TGT_RATE",
+        "ECPT_CTNT",
+        "ECPT_CNT",
+        "ECPT_RATE",
+        "NOCOL_CTNT",
+        "NOCOL_CNT",
+        "NOCOL_RATE",
+        "DONE_CTNT",
+        "DONE_CNT",
+        "DIAG_CNT",
+        "DONE_RATE",
+        "FALU_CTNT",
+        "FALU_CNT",
+        "FALU_RATE",
+        "STBY_CTNT",
+        "STBY_CNT",
+        "STBY_RATE",
+        "DIAG_TGT_GB",
+        "DIAG_ROW_CNT",
+        "ERR_CNT",
+        "ERR_RATE",
+        "REG_ID",
+        "REG_DTM",
+        "XLS_READ_DTM"
+      ],
+      "pk": [
+        "VLINS_RSLT_UNIQ_ID"
+      ],
+      "fk": []
+    },
+    "tb_diag_dtl_rslt": {
+      "columns": [
+        "VLINS_RSLT_UNIQ_ID",
+        "DIAG_RULE_NM",
+        "DIAG_TGT_GUBUN",
+        "DIAG_CNT",
+        "ERR_CNT",
+        "ERR_RATE",
+        "LATE_DIAG_DT",
+        "REG_DTM"
+      ],
+      "pk": [
+        "VLINS_RSLT_UNIQ_ID",
+        "DIAG_RULE_NM"
+      ],
+      "fk": []
+    },
+    "tb_diag_err_info": {
+      "columns": [
+        "VLINS_RSLT_UNIQ_ID",
+        "DIAG_ERR_NO",
+        "DBMS_NM",
+        "SCHEMA_NM",
+        "DIAG_TBL_NM",
+        "DIAG_CLMN_NM",
+        "DMN_NM",
+        "DIAG_RULE_NM",
+        "DIAG_CARY_TOT_CNT",
+        "ERR_CNT",
+        "ERR_RATE",
+        "ERR_DATA_SQL",
+        "ERR_DATA_CONT",
+        "REG_DTM"
+      ],
+      "pk": [
+        "VLINS_RSLT_UNIQ_ID",
+        "DIAG_ERR_NO"
+      ],
+      "fk": []
+    },
+    "tb_diag_m": {
+      "columns": [
+        "VLINS_RSLT_UNIQ_ID",
+        "POS_DB_ID",
+        "REG_UNIQ_ID",
+        "DIAG_ODER",
+        "LAST_DIAG_YN",
+        "DIAG_TP_NM",
+        "DIAG_STS_NM",
+        "RVIW_1_1_UNSF_CNT",
+        "RVIW_1_2_UNSF_CNT",
+        "RVIW_2_1_UNSF_CNT",
+        "RVIW_2_2_UNSF_CNT",
+        "RVIW_2_3_UNSF_CNT",
+        "RVIW_2_4_UNSF_CNT",
+        "RVIW_3_1_SATF_RATE",
+        "RVIW_3_2_SATF_RATE",
+        "RVIW_3_3_SATF_RATE",
+        "RVIW_4_1_ACPT_CNT",
+        "RVIW_tbl_cng_cnt",
+        "rviw_dmn_cng_cnt",
+        "rviw_br_cng_cnt",
+        "rvie_diag_aft_cnt",
+        "NTCE_DT",
+        "NTCE_CD",
+        "NTCE_CTNT",
+        "RINSP_YN",
+        "REG_ID",
+        "REG_DTM"
+      ],
+      "pk": [
+        "VLINS_RSLT_UNIQ_ID"
+      ],
+      "fk": []
+    },
+    "tb_diag_rangr_ok_m": {
+      "columns": [
+        "POS_DB_ID",
+        "DIAG_TBL_NM",
+        "ECPT_RANGE_YN",
+        "ECPT_RANGE_CNT",
+        "REG_ID",
+        "REG_DTM",
+        "MODF_ID"
+      ],
+      "pk": [
+        "POS_DB_ID",
+        "DIAG_TBL_NM"
+      ],
+      "fk": []
+    },
+    "tb_diag_tbl": {
+      "columns": [
+        "VLINS_RSLT_UNIQ_ID",
+        "COL_NUM",
+        "DBMS_NM",
+        "SCHEMA_NM",
+        "DIAG_TBL_NM",
+        "POS_DB_ID",
+        "DIAG_STS_NM",
+        "COLT_DT",
+        "RNG_COND_CTNT",
+        "NOCOL_CTNT",
+        "RVIW_NO",
+        "RVIW_OPNN_CTNT",
+        "RSLT_RVIE",
+        "REG_DTM"
+      ],
+      "pk": [
+        "VLINS_RSLT_UNIQ_ID",
+        "COL_NUM"
+      ],
+      "fk": []
+    },
+    "tb_diag_tbl_b": {
+      "columns": [
+        "VLINS_RSLT_UNIQ_ID",
+        "DBMS_NM",
+        "SCHEMA_NM",
+        "DIAG_TBL_NM",
+        "POS_DB_ID",
+        "DIAG_STS_NM",
+        "COLT_DT",
+        "RNG_COND_CTNT",
+        "NOCOL_CTNT",
+        "RVIW_NO",
+        "RVIW_OPNN_CTNT",
+        "RSLT_RVIE",
+        "REG_DTM"
+      ],
+      "pk": [],
+      "fk": []
+    },
+    "tb_dmn_chk": {
+      "columns": [
+        "POST_fiX",
+        "RESULT_DMN",
+        "CNT",
+        "DATA_TP"
+      ],
+      "pk": [],
+      "fk": []
+    },
+    "tb_dmn_chk_real": {
+      "columns": [
+        "POST_fiX",
+        "RESULT_DMN",
+        "CNT",
+        "DATA_TP"
+      ],
+      "pk": [],
+      "fk": []
+    },
+    "tb_log_mng": {
+      "columns": [
+        "LOG_ID",
+        "VLINS_RSLT_UNIQ_ID",
+        "FILE_NM",
+        "ORG_NM",
+        "LOG_CD",
+        "LOG_MSG",
+        "REG_DTM"
+      ],
+      "pk": [
+        "LOG_ID"
+      ],
+      "fk": []
+    },
+    "tb_pos_db_m": {
+      "columns": [
+        "POS_DB_ID",
+        "ORG_NM",
+        "INFO_SYS_NM",
+        "DB_NM",
+        "ORG_CD",
+        "real_org_nm",
+        "DB_ID",
+        "real_db_nm",
+        "diag_order",
+        "first_VLINS_RSLT_UNIQ_ID",
+        "scnd_VLINS_RSLT_UNIQ_ID",
+        "first_VLINS_RSLT_dt",
+        "scnd_VLINS_RSLT_dt",
+        "REG_DTM"
+      ],
+      "pk": [
+        "POS_DB_ID"
+      ],
+      "fk": []
+    },
+    "tb_reg_m": {
+      "columns": [
+        "REG_UNIQ_ID",
+        "FILE_NM",
+        "DIAG_ABVAL_RANK",
+        "DIAG_STS_NM",
+        "DIAG_PSBL_YN",
+        "DIAG_PROC_YN",
+        "CNGE_FILE_NM",
+        "LOCT_PATH_NM",
+        "LAST_DIAG_YN",
+        "REG_ID",
+        "REG_DTM",
+        "READ_DTM"
+      ],
+      "pk": [
+        "REG_UNIQ_ID"
+      ],
+      "fk": []
+    },
+    "tb_rule_br": {
+      "columns": [
+        "VLINS_RSLT_UNIQ_ID",
+        "ANAL_AREA_NM",
+        "BR_ID",
+        "BR_NM",
+        "BR_GRD_RULE",
+        "BR_DESC_CTNT",
+        "DBMS_NM",
+        "SCHEMA_NM",
+        "BR_TBL_NM",
+        "TGT_TOT_CNT_SQL",
+        "ERR_DATA_SQL",
+        "RVIW_NO",
+        "RVIW_OPNN_CTNT",
+        "RSLT_RVIE",
+        "REG_DTM"
+      ],
+      "pk": [
+        "VLINS_RSLT_UNIQ_ID",
+        "BR_ID"
+      ],
+      "fk": []
+    },
+    "tb_rule_dmn": {
+      "columns": [
+        "VLINS_RSLT_UNIQ_ID",
+        "COL_NUM",
+        "DBMS_NM",
+        "SCHEMA_NM",
+        "DIAG_TBL_NM",
+        "DIAG_CLMN_NM",
+        "DATA_TP_NM",
+        "RULST_NM",
+        "DMN_NM",
+        "VFCTN_FORM_NM",
+        "ECPT_DATA_CTNT",
+        "VFCTN_RULE_DT",
+        "COLT_DATA_CONT",
+        "ECPT_OPNN_CTNT",
+        "RVIW_NO",
+        "RVIW_DMN_NM",
+        "RVIW_OPNN_CTNT",
+        "RSLT_RVIE",
+        "REG_DTM",
+        "NULL_YN"
+      ],
+      "pk": [
+        "VLINS_RSLT_UNIQ_ID",
+        "COL_NUM"
+      ],
+      "fk": []
+    },
+    "tb_rule_ref": {
+      "columns": [
+        "VLINS_RSLT_UNIQ_ID",
+        "DBMS_NM",
+        "SCHEMA_NM",
+        "DIAG_TBL_NM",
+        "DIAG_CLMN_NM",
+        "REF_TBL_NM",
+        "REF_CLMN_NM",
+        "JOIN_ORDER",
+        "DIAG_TBL_COND_SQL",
+        "RVIW_NO",
+        "RVIW_OPNN_CTNT",
+        "REG_DTM"
+      ],
+      "pk": [
+        "VLINS_RSLT_UNIQ_ID",
+        "DIAG_TBL_NM",
+        "DIAG_CLMN_NM",
+        "REF_TBL_NM",
+        "REF_CLMN_NM"
+      ],
+      "fk": []
+    },
+    "tb_validation_chk": {
+      "columns": [
+        "index_id",
+        "use_yn",
+        "DATA_VAL",
+        "flag",
+        "Column5"
+      ],
+      "pk": [],
+      "fk": []
+    },
+    "test_dq_file": {
+      "columns": [
+        "SEQ",
+        "GIWAN_NM",
+        "GIWAN_CD",
+        "SYSTEM_NM",
+        "KOR_DB_NM",
+        "ENG_DB_NM",
+        "FILE_PATH",
+        "M_GUBUN",
+        "M_FILE_NM",
+        "DIR1",
+        "DIR2",
+        "DIR3",
+        "DIR4",
+        "DIR5",
+        "DIR6",
+        "DIR7",
+        "DIR8",
+        "DIR9",
+        "DIR10",
+        "DIR11",
+        "DIR12",
+        "DATABASE_ID"
+      ],
+      "pk": [],
+      "fk": []
+    },
+    "test_dq_list": {
+      "columns": [
+        "SEQ",
+        "GIWAN_NM",
+        "GIWAN_CD",
+        "FIX_YN",
+        "FIX_DT",
+        "SYSTEM_NM",
+        "DATABASE_ID",
+        "KOR_DB_NM",
+        "ENG_DB_NM",
+        "M1_YN",
+        "M1_FILE_NM",
+        "M2_YN",
+        "M2_FILE_NM",
+        "M3_YN",
+        "M3_FILE_NM",
+        "A1",
+        "A2",
+        "A3",
+        "B1",
+        "B2",
+        "B3",
+        "FILE_PATH",
+        "C1",
+        "C2",
+        "C3",
+        "D1",
+        "D2",
+        "D3"
+      ],
+      "pk": [],
+      "fk": []
+    }
+  },
+  "joins": [],
+  "synonyms": {},
+  "_db_type": "mariadb",
+  "_cached_at": 1771912481.9450185
+}
