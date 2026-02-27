@@ -1,0 +1,32 @@
+# AETL Architecture Analysis: Why Metadata Engine is Critical
+
+## 1. Problem: Direct DB Exploration
+When an AI Agent is connected directly to a DB without a metadata layer, it suffers from several issues:
+
+| Issue | Description | Impact |
+| :--- | :--- | :--- |
+| **Context Window** | LLMs cannot see the whole DB schema if it's too large. | Incorrect SQL/Logic |
+| **Latency** | On-demand profiling (`COUNT DISTINCT`, etc.) takes a long time. | UI/Agent Timeout |
+| **Security** | Direct exploration tools might be tricked into running destructive SQL. | Data Risk |
+| **Cost** | Each 'thought' of the Agent could trigger expensive DB aggregation. | System Performance |
+
+## 2. Solution: Metadata Engine (The Buffer)
+The feedback you received is industry-standard for enterprise AI agents (e.g., DataBrew, Databricks).
+
+```mermaid
+graph LR
+    DB[(Live DB)] -- "Crawling & Profiling" --> ME[Metadata Engine]
+    ME -- "Save" --> MS[(Metadata Store)]
+    Agent[AI Agent] -- "Query" --> MS
+    Agent -- "Safety-Checked SQL" --> DB
+```
+
+### Key Advantages:
+1.  **Pre-computation**: The Agent answers "What is the null ratio of column X?" in milliseconds by reading the store, not querying the DB.
+2.  **Topographic Mapping**: The Agent "knows" all tables and their relationships from the start, improving its planning capability.
+3.  **Safety**: The Metadata Store contains no PII, only statistical counts. The Agent only interacts with the DB for specific verified tasks.
+
+## 3. Current AETL Status
+- **Schema**: Already uses a caching mechanism ([.schema_cache.json](file:///c:/Users/%EC%95%88%EC%A3%BC%ED%98%84/Desktop/AETL_program_dev/.schema_cache.json)). This is a "Partial Metadata Engine".
+- **Profiler**: Currently works in **Direct** mode. It should be upgraded to save results to the cache.
+- **Agent**: Needs to be re-wired to prioritize the cache over live tools.

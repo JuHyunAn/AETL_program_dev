@@ -104,6 +104,36 @@ html, body, [class*="css"] {
     margin: 16px 0 4px 0 !important;
     display: block;
 }
+/* 메뉴 그룹 레이블 */
+.sb-group {
+    font-size: 9px !important;
+    font-weight: 700 !important;
+    color: #94A3B8 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.12em !important;
+    margin: 10px 0 4px 4px !important;
+    display: block;
+    padding: 2px 0;
+    border-bottom: 1px solid #E2E8F0;
+}
+/* 네비게이션 버튼 스타일 — secondary (비활성) */
+[data-testid="stSidebar"] .stButton > button {
+    text-align: left !important;
+    justify-content: flex-start !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    padding: 5px 10px !important;
+    border-radius: 6px !important;
+    height: auto !important;
+    margin: 1px 0 !important;
+}
+/* 네비게이션 버튼 — primary (활성) */
+[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+    background-color: #EFF6FF !important;
+    border-color: #3B82F6 !important;
+    color: #1D4ED8 !important;
+    font-weight: 700 !important;
+}
 
 /* ══════════════════════════════════════
    페이지 헤더 — Supabase 스타일
@@ -695,80 +725,121 @@ if "db_conn_config" not in st.session_state:
 
 
 # ─────────────────────────────────────────
+# 페이지 상태 초기화
+# ─────────────────────────────────────────
+if "page" not in st.session_state:
+    st.session_state["page"] = "검증 쿼리 생성"
+if "global_mode" not in st.session_state:
+    st.session_state["global_mode"] = "파일 업로드"
+if "_sidebar_conn_open" not in st.session_state:
+    st.session_state["_sidebar_conn_open"] = False
+
+# ─────────────────────────────────────────
 # Sidebar
 # ─────────────────────────────────────────
 with st.sidebar:
-    # 로고
-    # try:
-    #     st.image("documents/logo.png", width='stretch')
-    # except Exception:
-    #     st.markdown('<div style="color:#0070C0;font-weight:700;font-size:16px;padding:10px 0;">ETL Validator</div>', unsafe_allow_html=True)
-
-    st.markdown('<div style="color:#0070C0;font-weight:700;font-size:16px;padding:10px 0;">AETL</div>', unsafe_allow_html=True)
-    
+    st.markdown('<div style="color:#0070C0;font-weight:700;font-size:18px;padding:10px 0 6px;">AETL</div>', unsafe_allow_html=True)
+    st.caption("AI-driven Sub ETL Platform")
     st.divider()
 
-    # ── 페이지 선택 ──
-    st.markdown('<span class="sb-section">메뉴</span>', unsafe_allow_html=True)
-    page = st.radio(
-        "페이지",
-        options=["검증 쿼리 생성", "AI Agent", "데이터 프로파일",
-                 "검증 실행", "매핑 자동화", "DW 설계", "리니지 분석", "ETL Flow Map"],
-        index=0,
+    # ── 전역 데이터 소스 ────────────────────────────────────
+    st.markdown('<span class="sb-section">데이터 소스</span>', unsafe_allow_html=True)
+    mode = st.radio(
+        "데이터 소스",
+        options=["파일 업로드", "DB 직접 연결"],
+        index=0 if st.session_state["global_mode"] == "파일 업로드" else 1,
         label_visibility="collapsed",
+        key="global_mode_radio",
+    )
+    st.session_state["global_mode"] = mode
+
+    if mode == "DB 직접 연결":
+        _db_type_opts = ["oracle", "mariadb", "postgresql"]
+        _cur_db = st.session_state["db_conn_config"].get("db_type", "oracle")
+        db_type = st.selectbox(
+            "DB 종류",
+            options=_db_type_opts,
+            index=_db_type_opts.index(_cur_db) if _cur_db in _db_type_opts else 0,
+            label_visibility="collapsed",
+            key="global_db_type",
+        )
+        # ── 연결 상태 표시 ──────────────────────────────
+        _cfg = st.session_state["db_conn_config"]
+        if _cfg.get("connected", False):
+            _db_lbl = {"oracle": "Oracle", "mariadb": "MariaDB", "postgresql": "PostgreSQL"}.get(
+                _cfg.get("db_type", ""), "DB")
+            st.markdown(
+                f'<div style="font-size:11px;color:#16A34A;padding:2px 0 4px;">'
+                f'● 연결됨 &nbsp;·&nbsp; {_db_lbl} &nbsp;·&nbsp; '
+                f'{_cfg.get("host","?")}:{_cfg.get("port","?")}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div style="font-size:11px;color:#DC2626;padding:2px 0 4px;">'
+                '● 연결 안됨 &nbsp;—&nbsp; 아래 버튼으로 연결하세요'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        if st.button("Connect to DB", key="sb_conn_btn", type="primary", use_container_width=True):
+            st.session_state["_sidebar_conn_open"] = True
+            st.rerun()
+    else:
+        # 파일 업로드 모드: db_type 변수는 기존 config에서 유지
+        db_type = st.session_state["db_conn_config"].get("db_type", "oracle")
+
+    st.markdown('<span class="sb-section">생성 방식</span>', unsafe_allow_html=True)
+    use_llm = st.toggle(
+        "AI 강화 생성",
+        value=True,
+        help="ON: LLM이 컨텍스트를 이해하여 정교한 쿼리를 생성합니다.\nOFF: 템플릿 기반 즉시 생성 (API 키 불필요)",
+        key="global_use_llm",
     )
 
     st.divider()
 
-    # ── 검증 쿼리 생성 전용 설정 ──
-    if page == "검증 쿼리 생성":
-        st.markdown('<span class="sb-section">데이터 소스</span>', unsafe_allow_html=True)
-        mode = st.radio(
-            "데이터 소스",
-            options=["파일 업로드", "DB 직접 연결"],
-            index=0,
-            label_visibility="collapsed",
-        )
-    else:
-        mode = "DB 직접 연결"
+    # ── 메뉴 네비게이션 ─────────────────────────────────────
+    def _nav(label: str):
+        is_active = st.session_state["page"] == label
+        if st.button(
+            label,
+            key=f"nav__{label.replace(' ', '_')}",
+            use_container_width=True,
+            type="primary" if is_active else "secondary",
+        ):
+            st.session_state["page"] = label
+            st.rerun()
 
-    if page == "검증 쿼리 생성":
-        st.markdown('<span class="sb-section">DB 종류</span>', unsafe_allow_html=True)
-        db_type = st.selectbox(
-            "DB 종류",
-            options=["oracle", "mariadb", "postgresql"],
-            index=0,
-            label_visibility="collapsed",
-        )
-    else:
-        # Agent / Profile: db_type은 연결 다이얼로그에서 관리
-        db_type = st.session_state["db_conn_config"].get("db_type", "mariadb")
-
-    if page == "검증 쿼리 생성":
-        st.markdown('<span class="sb-section">생성 방식</span>', unsafe_allow_html=True)
-        use_llm = st.toggle(
-            "AI 강화 생성",
-            value=True,
-            help="ON: LLM이 컨텍스트를 이해하여 정교한 쿼리를 생성합니다.\nOFF: 템플릿 기반 즉시 생성 (API 키 불필요)",
-        )
-    else:
-        use_llm = True
+    # [Copilot]
+    st.markdown('<div class="sb-group">Copilot</div>', unsafe_allow_html=True)
+    _nav("AI 챗봇")
 
     st.divider()
 
-    if page == "검증 쿼리 생성":
+    # [Automation]
+    st.markdown('<div class="sb-group">Automation</div>', unsafe_allow_html=True)
+    _nav("데이터 프로파일")
+    _nav("검증 쿼리 생성")
+    _nav("검증 실행")
+    _nav("매핑 자동화")
+    _nav("ETL Lineage")
+
+    st.divider()
+
+    # [Modeling]
+    st.markdown('<div class="sb-group">Modeling</div>', unsafe_allow_html=True)
+    _nav("DW 설계")
+
+    page = st.session_state["page"]
+
+    st.divider()
+
+    # ── 페이지별 도움말 ─────────────────────────────────────
+    if page == "AI 챗봇":
         st.markdown("""
 <div style="font-size:11px;line-height:1.8;color:#475569;">
-<b style="color:#0070C0;font-size:10px;">업로드 파일 안내</b><br><br>
-<b style="color:#374151;font-weight:600;">매핑정의서</b> (DM/DW/ODS 표준)<br>
-Excel 파일 1개로 소스·타겟·매핑 자동 추출<br><br>
-<b style="color:#374151;font-weight:600;">테이블 정의서</b> (Excel / CSV)<br>
-컬럼명, 데이터타입, PK, NULL여부 포함
-</div>""", unsafe_allow_html=True)
-    elif page == "AI Agent":
-        st.markdown("""
-<div style="font-size:11px;line-height:1.8;color:#475569;">
-<b style="color:#0070C0;font-size:10px;">AI Agent 안내</b><br><br>
+<b style="color:#0070C0;font-size:10px;">AI 챗봇 안내</b><br><br>
 자연어로 ETL 태스크를 요청하세요.<br><br>
 <b style="color:#374151;font-weight:600;">지원 기능</b><br>
 · 테이블 스키마 조회<br>
@@ -788,6 +859,15 @@ DB에 직접 연결하여 테이블의<br>데이터 통계를 분석합니다.<b
 · 도메인 자동 추론<br>
 · AI 검증 규칙 자동 제안
 </div>""", unsafe_allow_html=True)
+    elif page == "검증 쿼리 생성":
+        st.markdown("""
+<div style="font-size:11px;line-height:1.8;color:#475569;">
+<b style="color:#0070C0;font-size:10px;">업로드 파일 안내</b><br><br>
+<b style="color:#374151;font-weight:600;">매핑정의서</b> (DM/DW/ODS 표준)<br>
+Excel 파일 1개로 소스·타겟·매핑 자동 추출<br><br>
+<b style="color:#374151;font-weight:600;">테이블 정의서</b> (Excel / CSV)<br>
+컬럼명, 데이터타입, PK, NULL여부 포함
+</div>""", unsafe_allow_html=True)
     elif page == "검증 실행":
         st.markdown("""
 <div style="font-size:11px;line-height:1.8;color:#475569;">
@@ -806,9 +886,20 @@ SQL을 분류하고 안전하게 실행합니다.<br><br>
 컬럼 매핑 기반 문서를 자동 생성합니다.<br><br>
 <b style="color:#374151;font-weight:600;">생성 항목</b><br>
 · 매핑정의서 Excel (6시트)<br>
-· DDL Script<br>
-· MERGE SQL<br>
+· DDL Script · MERGE SQL<br>
 · 검증 리포트 Excel
+</div>""", unsafe_allow_html=True)
+    elif page == "ETL Lineage":
+        st.markdown("""
+<div style="font-size:11px;line-height:1.8;color:#475569;">
+<b style="color:#0070C0;font-size:10px;">ETL Lineage 안내</b><br><br>
+매핑 자동화에서 등록된 파이프라인을<br>인터랙티브 그래프로 시각화합니다.<br><br>
+<b style="color:#374151;font-weight:600;">기능</b><br>
+· 테이블 노드 클릭 → 컬럼 펼치기<br>
+· 레이어별 색상 구분<br>
+· ODS → DW → DM 자동 배치<br><br>
+<b style="color:#374151;font-weight:600;">등록 방법</b><br>
+매핑 자동화 → [Flow Map 생성] 버튼
 </div>""", unsafe_allow_html=True)
     elif page == "DW 설계":
         st.markdown("""
@@ -821,30 +912,6 @@ AI가 Star Schema를 자동 설계합니다.<br><br>
 <b style="color:#374151;font-weight:600;">출력</b><br>
 · ODS / Fact / Dim / DM 테이블<br>
 · Mermaid ERD + DDL
-</div>""", unsafe_allow_html=True)
-    elif page == "리니지 분석":
-        st.markdown("""
-<div style="font-size:11px;line-height:1.8;color:#475569;">
-<b style="color:#0070C0;font-size:10px;">리니지 분석 안내</b><br><br>
-SQL에서 데이터 흐름을 자동 추적합니다.<br><br>
-<b style="color:#374151;font-weight:600;">파싱 방식</b><br>
-· sqlglot 규칙 기반 (LLM 없음)<br>
-· 100% 결정론적<br><br>
-<b style="color:#374151;font-weight:600;">출력</b><br>
-· 컬럼/테이블 리니지 시각화<br>
-· Forward/Backward 영향도 분석
-</div>""", unsafe_allow_html=True)
-    else:  # ETL Flow Map
-        st.markdown("""
-<div style="font-size:11px;line-height:1.8;color:#475569;">
-<b style="color:#0070C0;font-size:10px;">ETL Flow Map 안내</b><br><br>
-등록된 매핑을 인터랙티브<br>파이프라인 그래프로 시각화합니다.<br><br>
-<b style="color:#374151;font-weight:600;">기능</b><br>
-· 테이블 노드 클릭 → 컬럼 펼치기<br>
-· 레이어별 색상 구분<br>
-· (ODS → DW → DM 방향 자동 배치)<br><br>
-<b style="color:#374151;font-weight:600;">등록 방법</b><br>
-매핑 자동화 페이지에서<br>산출물 생성 시 자동 등록
 </div>""", unsafe_allow_html=True)
 
 
@@ -898,9 +965,19 @@ def db_connection_dialog():
     )
 
     if db_t == "oracle":
-        owner = st.text_input("스키마(Owner)", value=cfg.get("owner", ""),
-                               key="dlg_owner",
-                               help="Oracle 스키마 명 (비워두면 로그인 사용자 기준)")
+        owner = st.text_input(
+            "스키마(Owner)", value=cfg.get("owner", ""),
+            key="dlg_owner",
+            help="Oracle 스키마 명 (비워두면 로그인 사용자 기준)",
+        )
+    elif db_t == "postgresql":
+        owner = st.text_input(
+            "스키마 필터 (선택)",
+            value=cfg.get("owner", ""),
+            key="dlg_owner",
+            placeholder="예: public,public_marts",
+            help="쉼표로 여러 스키마 지정 가능. 비워두면 시스템 스키마를 제외한 전체 스키마 조회",
+        )
     else:
         owner = ""
 
@@ -930,6 +1007,12 @@ def db_connection_dialog():
     with col_cancel:
         if st.button("닫기", key="dlg_cancel"):
             st.rerun()
+
+
+# ── 사이드바 DB 연결 버튼 트리거 ─────────────────────────
+if st.session_state.get("_sidebar_conn_open", False):
+    st.session_state["_sidebar_conn_open"] = False
+    db_connection_dialog()
 
 
 def _test_db_connection(db_type: str, host: str, port: int,
@@ -1084,30 +1167,27 @@ def render_query_results(queries: dict):
 # ─────────────────────────────────────────
 _db_badge = {"oracle": "Oracle", "mariadb": "MariaDB", "postgresql": "PostgreSQL"}.get(db_type, db_type)
 _page_meta = {
+    "AI 챗봇":        ("AETL AI Copilot",
+                       "자연어로 ETL 태스크를 요청하면 AI가 도구를 활용하여 자동으로 수행합니다.",
+                       "Copilot"),
+    "데이터 프로파일": ("Data Profiler",
+                        "DB에 직접 연결하여 테이블 데이터 통계 및 품질 규칙을 자동 분석합니다.",
+                        "Profiler"),
     "검증 쿼리 생성": ("ETL Validation Query Generator",
                        "테이블 정의서 또는 DB 스키마를 기반으로 ETL 검증 쿼리를 자동 생성합니다.",
                        "AI 생성" if use_llm else "템플릿 생성"),
-    "AI Agent":       ("AETL AI Agent",
-                       "자연어로 ETL 태스크를 요청하면 AI가 도구를 활용하여 자동으로 수행합니다.",
-                       "Agent 모드"),
-    "데이터 프로파일": ("Data Profiler",
-                        "DB에 직접 연결하여 테이블 데이터 통계 및 품질 규칙을 자동 분석합니다.",
-                        "Profiler 모드"),
     "검증 실행":      ("SQL 검증 실행기",
                        "SQL을 분류하고 안전하게 실행합니다. 오류 시 AI가 원인 분석 및 수정 방안을 제안합니다.",
                        "Human-in-the-Loop"),
     "매핑 자동화":    ("매핑 자동화 & 문서 생성",
                        "컬럼 매핑을 기반으로 매핑정의서 Excel, DDL, MERGE SQL, 검증 리포트를 자동 생성합니다.",
                        "Export Engine"),
+    "ETL Lineage":    ("ETL Pipeline Lineage",
+                       "등록된 매핑 기반 파이프라인을 React Flow 인터랙티브 그래프로 시각화합니다.",
+                       "Lineage"),
     "DW 설계":        ("DW Star Schema 설계",
                        "Swagger/OpenAPI 또는 텍스트에서 ODS/DW/DM 스타 스키마를 AI가 자동 설계합니다.",
                        "DW Designer"),
-    "리니지 분석":    ("SQL 데이터 리니지 분석",
-                       "SQL에서 테이블·컬럼 간 데이터 흐름을 추적하고 Mermaid 다이어그램으로 시각화합니다.",
-                       "Lineage Engine"),
-    "ETL Flow Map":   ("ETL Pipeline Flow Map",
-                       "등록된 매핑 기반 파이프라인을 React Flow 인터랙티브 그래프로 시각화합니다.",
-                       "Flow Map"),
 }
 _title, _subtitle, _badge_text = _page_meta.get(page, ("ETL Validator", "", ""))
 st.markdown(f"""
@@ -1122,10 +1202,18 @@ st.markdown(f"""
 
 
 # ═══════════════════════════════════════════════════════════
-# AI Agent 페이지
+# AI 챗봇 페이지
 # ═══════════════════════════════════════════════════════════
-if page == "AI Agent":
-    render_conn_bar("agent")
+if page == "AI 챗봇":
+    # DB 연결 안내 (연결 안됐을 때만)
+    if st.session_state["global_mode"] == "DB 직접 연결" and \
+            not st.session_state["db_conn_config"].get("connected", False):
+        st.info(
+            "ℹ️ DB가 연결되지 않았습니다. 사이드바의 **[Connect to DB]** 버튼으로 연결하면 "
+            "테이블 스키마 조회·프로파일링 등 DB 기반 기능을 사용할 수 있습니다.",
+            icon=None,
+        )
+
     st.markdown('<div class="step-row"><span class="step-num">1</span><span class="step-text">AI Agent 대화</span></div>', unsafe_allow_html=True)
     st.caption("자연어로 ETL 관련 질문이나 작업을 입력하세요. AI가 도구를 호출하여 자동으로 처리합니다.")
 
@@ -1203,7 +1291,23 @@ if page == "AI Agent":
 # 데이터 프로파일 페이지
 # ═══════════════════════════════════════════════════════════
 if page == "데이터 프로파일":
-    render_conn_bar("profile")
+    # 파일 업로드 모드에서는 DB 프로파일링 불가 안내
+    if st.session_state["global_mode"] == "파일 업로드":
+        st.warning(
+            "⚠️ **데이터 프로파일**은 DB 직접 연결이 필요합니다.\n\n"
+            "사이드바에서 **'DB 직접 연결'** 을 선택하고 **[Connect to DB]** 버튼으로 연결 정보를 입력하세요.",
+            icon=None,
+        )
+        st.stop()
+
+    # DB 연결 여부 확인
+    _profile_cfg = st.session_state["db_conn_config"]
+    if not _profile_cfg.get("connected", False):
+        st.info(
+            "ℹ️ DB가 연결되지 않았습니다. 사이드바의 **[Connect to DB]** 버튼으로 먼저 연결하세요.",
+            icon=None,
+        )
+
     st.markdown('<div class="step-row"><span class="step-num">1</span><span class="step-text">프로파일링 대상 설정</span></div>', unsafe_allow_html=True)
 
     col_tbl, col_btn_p = st.columns([4, 1])
@@ -1211,7 +1315,7 @@ if page == "데이터 프로파일":
         profile_table_name = st.text_input(
             "테이블명",
             placeholder="예: TB_CUSTOMER",
-            help="DB에 존재하는 테이블명을 입력하세요. db_config.json 연결 설정을 사용합니다.",
+            help="DB에 존재하는 테이블명을 입력하세요.",
         )
     with col_btn_p:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
@@ -1357,18 +1461,9 @@ if page == "데이터 프로파일":
 # ═══════════════════════════════════════════════════════════
 if page == "검증 실행":
     import pandas as pd
-    render_conn_bar("exec")
+    exec_db_type = st.session_state["db_conn_config"].get("db_type", "oracle")
 
     st.markdown('<div class="step-row"><span class="step-num">1</span><span class="step-text">SQL 입력 및 분류</span></div>', unsafe_allow_html=True)
-
-    col_db_exec, _ = st.columns([2, 5])
-    with col_db_exec:
-        exec_db_type = st.selectbox(
-            "DB 종류", options=["oracle", "mariadb", "postgresql"],
-            index=["oracle", "mariadb", "postgresql"].index(
-                st.session_state["db_conn_config"].get("db_type", "oracle")),
-            key="exec_db_type",
-        )
 
     sql_input = st.text_area(
         "SQL 입력", height=200,
@@ -1653,8 +1748,15 @@ if page == "매핑 자동화":
             key="export_db_type",
         )
 
-    # ── [전체 산출물 생성] — 단일 버튼으로 모든 파일 생성 ──
-    if st.button("전체 산출물 생성", key="gen_all_exports", type="primary", use_container_width=True):
+    # ── [산출물 생성] + [Flow Map 생성] — 두 버튼으로 분리 ──
+    _btn_col1, _btn_col2 = st.columns([3, 2])
+    with _btn_col1:
+        _do_export = st.button("산출물 생성", key="gen_all_exports", type="primary", use_container_width=True)
+    with _btn_col2:
+        _do_flowmap = st.button("Flow Map 생성", key="gen_flow_map", type="secondary", use_container_width=True)
+        st.caption("'ETL Lineage' 메뉴에서 Lineage 시각화를 생성합니다.")
+
+    if _do_export:
         with st.spinner("산출물 생성 중..."):
             try:
                 # 1) MERGE SQL (SOT → 파생)
@@ -1693,25 +1795,30 @@ if page == "매핑 자동화":
                     src_meta, tgt_meta, col_mappings
                 )
 
-                # 8) ETL Flow Map 등록 (SOT 기반 mapping_result 추가/업데이트)
-                _flow_entry = {
-                    "mapping_id":  mapping_id,
-                    "source_meta": src_meta,
-                    "target_meta": tgt_meta,
-                    "load_type":   "MERGE",
-                }
-                _existing = st.session_state["flow_map_mappings"]
-                _ids = [m["mapping_id"] for m in _existing]
-                if mapping_id in _ids:
-                    _existing[_ids.index(mapping_id)] = _flow_entry
-                else:
-                    _existing.append(_flow_entry)
-                st.session_state["flow_map_mappings"] = _existing
-
-                st.success("전체 산출물 생성 완료! 아래에서 다운로드하세요.")
+                st.success("산출물 생성 완료! 아래에서 다운로드하세요.")
             except Exception as e:
                 st.error(f"생성 오류: {e}")
                 st.code(traceback.format_exc())
+
+    if _do_flowmap:
+        try:
+            # ETL Flow Map 등록 (SOT 기반 mapping_result 추가/업데이트)
+            _flow_entry = {
+                "mapping_id":  mapping_id,
+                "source_meta": src_meta,
+                "target_meta": tgt_meta,
+                "load_type":   "MERGE",
+            }
+            _existing = st.session_state["flow_map_mappings"]
+            _ids = [m["mapping_id"] for m in _existing]
+            if mapping_id in _ids:
+                _existing[_ids.index(mapping_id)] = _flow_entry
+            else:
+                _existing.append(_flow_entry)
+            st.session_state["flow_map_mappings"] = _existing
+            st.success(f"Flow Map 등록 완료! 'ETL Lineage' 메뉴에서 확인하세요.")
+        except Exception as e:
+            st.error(f"Flow Map 등록 오류: {e}")
 
     # ── 다운로드 버튼 ────────────────────────────────────────
     st.divider()
@@ -2141,161 +2248,12 @@ if page == "DW 설계":
     st.stop()
 
 
-# ═══════════════════════════════════════════════════════════
-# 리니지 분석 페이지
-# ═══════════════════════════════════════════════════════════
-if page == "리니지 분석":
-    import pandas as pd
-
-    st.markdown('<div class="step-row"><span class="step-num">1</span><span class="step-text">SQL 입력</span></div>', unsafe_allow_html=True)
-    st.caption("INSERT INTO … SELECT, CREATE TABLE AS SELECT, SELECT 등 SQL을 입력하세요. sqlglot 규칙 기반 파싱 (100% 결정론적, LLM 없음).")
-
-    col_lineage_db, _ = st.columns([2, 5])
-    with col_lineage_db:
-        lineage_db_type = st.selectbox(
-            "DB 종류", options=["oracle", "mariadb", "postgresql"],
-            index=["oracle", "mariadb", "postgresql"].index(
-                st.session_state["db_conn_config"].get("db_type", "oracle")),
-            key="lineage_db_type",
-        )
-
-    lineage_sql = st.text_area(
-        "SQL 입력", height=200,
-        placeholder=(
-            "예:\n"
-            "INSERT INTO DW_SALES (SALE_ID, CUST_ID, SALE_AMT, SALE_DT)\n"
-            "SELECT s.SALE_ID, s.CUST_ID, NVL(s.AMT, 0) AS SALE_AMT, s.SALE_DT\n"
-            "FROM ODS_SALES s\n"
-            "JOIN DIM_CUSTOMER c ON s.CUST_ID = c.CUST_ID"
-        ),
-        key="lineage_sql_input",
-    )
-
-    col_analyze_btn, col_clear_btn, _ = st.columns([2, 2, 5])
-    with col_analyze_btn:
-        analyze_btn = st.button("리니지 분석 실행", key="btn_lineage_analyze", type="primary")
-    with col_clear_btn:
-        if st.button("초기화", key="btn_lineage_clear", type="secondary"):
-            st.session_state["lineage_result"] = None
-            st.session_state["lineage_graph"] = None
-            st.session_state["lineage_explanation"] = None
-            st.rerun()
-
-    if analyze_btn and lineage_sql.strip():
-        with st.spinner("SQL 파싱 중..."):
-            try:
-                from aetl_lineage import parse_lineage, build_lineage_graph
-                lineage_result = parse_lineage(lineage_sql.strip(), lineage_db_type)
-                if lineage_result.get("error"):
-                    st.error(f"파싱 오류: {lineage_result['error']}")
-                else:
-                    st.session_state["lineage_result"] = lineage_result
-                    st.session_state["lineage_graph"] = build_lineage_graph(lineage_result)
-                    st.session_state["lineage_explanation"] = None
-                    st.success(
-                        f"파싱 완료 — 소스 테이블 {len(lineage_result['source_tables'])}개 / "
-                        f"컬럼 매핑 {len(lineage_result['column_lineage'])}개"
-                    )
-            except Exception as e:
-                st.error(f"분석 오류: {e}")
-                st.code(traceback.format_exc())
-
-    if st.session_state["lineage_result"]:
-        lineage = st.session_state["lineage_result"]
-        G = st.session_state["lineage_graph"]
-
-        st.markdown('<div class="step-row"><span class="step-num">2</span><span class="step-text">리니지 시각화</span></div>', unsafe_allow_html=True)
-        viz_tab1, viz_tab2 = st.tabs(["컬럼 리니지", "테이블 리니지"])
-
-        with viz_tab1:
-            try:
-                from aetl_lineage import generate_mermaid_lineage
-                mermaid_col = generate_mermaid_lineage(lineage, max_cols=25)
-                st.markdown(f"```mermaid\n{mermaid_col}\n```")
-            except Exception as e:
-                st.error(f"시각화 오류: {e}")
-
-        with viz_tab2:
-            try:
-                from aetl_lineage import generate_mermaid_table_lineage
-                mermaid_tbl = generate_mermaid_table_lineage(lineage)
-                st.markdown(f"```mermaid\n{mermaid_tbl}\n```")
-            except Exception as e:
-                st.error(f"시각화 오류: {e}")
-
-        st.markdown('<div class="step-row"><span class="step-num">3</span><span class="step-text">컬럼 매핑 상세</span></div>', unsafe_allow_html=True)
-        col_lineage_data = lineage.get("column_lineage", [])
-        if col_lineage_data:
-            df_col_lineage = pd.DataFrame([{
-                "소스 테이블": c.get("source_table", ""),
-                "소스 컬럼":  c.get("source_col", ""),
-                "타겟 컬럼":  c.get("target_col", ""),
-                "변환":      c.get("transform", "") or "DIRECT",
-            } for c in col_lineage_data])
-            st.dataframe(df_col_lineage, width='stretch', hide_index=True)
-        else:
-            st.info("컬럼 리니지가 추출되지 않았습니다.")
-
-        st.markdown('<div class="step-row"><span class="step-num">4</span><span class="step-text">영향도 분석</span></div>', unsafe_allow_html=True)
-        st.caption("특정 컬럼을 선택하면 Forward(하위 영향) 또는 Backward(상위 원인) 경로를 탐색합니다.")
-
-        if G and G.nodes():
-            node_list = sorted(G.nodes())
-            col_nd, col_dr, col_ib = st.columns([4, 2, 2])
-            with col_nd:
-                selected_node = st.selectbox("컬럼 노드 선택", node_list, key="impact_node")
-            with col_dr:
-                impact_dir = st.selectbox(
-                    "방향",
-                    options=["forward", "backward"],
-                    format_func={"forward": "Forward (하위 영향)", "backward": "Backward (상위 원인)"}.get,
-                    key="impact_dir",
-                )
-            with col_ib:
-                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                impact_btn = st.button("영향도 탐색", key="btn_impact", type="primary")
-
-            if impact_btn:
-                try:
-                    from aetl_lineage import get_impact
-                    impact_nodes = get_impact(G, selected_node, impact_dir)
-                    if impact_nodes:
-                        label = "하위 영향 컬럼" if impact_dir == "forward" else "상위 원인 컬럼"
-                        st.success(f"{label}: {len(impact_nodes)}개")
-                        st.dataframe(pd.DataFrame({"컬럼": impact_nodes}), width='stretch', hide_index=True,
-                                     height=min(300, 36 * len(impact_nodes) + 42))
-                    else:
-                        st.info("영향 받는 컬럼이 없습니다.")
-                except Exception as e:
-                    st.error(f"영향도 분석 오류: {e}")
-        else:
-            st.info("그래프 노드가 없습니다.")
-
-        st.markdown('<div class="step-row"><span class="step-num">5</span><span class="step-text">AI 리니지 설명</span></div>', unsafe_allow_html=True)
-        st.caption("sqlglot이 추출한 리니지 결과를 AI가 한국어로 설명합니다. SQL을 직접 재파싱하지 않습니다.")
-
-        if st.button("AI 설명 생성", key="btn_lineage_explain", type="secondary"):
-            with st.spinner("AI 설명 생성 중..."):
-                try:
-                    from aetl_lineage import explain_lineage
-                    st.session_state["lineage_explanation"] = explain_lineage(lineage)
-                except Exception as e:
-                    st.error(f"설명 생성 오류: {e}")
-
-        if st.session_state["lineage_explanation"]:
-            st.markdown(
-                f'<div class="card"><div style="font-size:13px;line-height:1.8;">'
-                f'{st.session_state["lineage_explanation"]}</div></div>',
-                unsafe_allow_html=True,
-            )
-
-    st.stop()
-
+# (리니지 분석 페이지 제거됨 — ETL Lineage로 대체)
 
 # ═══════════════════════════════════════════════════════════
-# ETL Flow Map 페이지
+# ETL Lineage 페이지
 # ═══════════════════════════════════════════════════════════
-if page == "ETL Flow Map":
+if page == "ETL Lineage":
     from etl_flow_component import etl_flow_map, build_flow_data_from_mappings
 
     mappings = st.session_state.get("flow_map_mappings", [])
@@ -2324,7 +2282,7 @@ if page == "ETL Flow Map":
     if not mappings:
         st.info(
             "등록된 매핑이 없습니다.  \n"
-            "**매핑 자동화** 페이지에서 '전체 산출물 생성'을 실행하면 자동으로 등록됩니다.",
+            "**매핑 자동화** 페이지에서 **Flow Map 생성** 버튼을 클릭하면 자동으로 등록됩니다.",
             icon="ℹ️",
         )
     else:
@@ -2515,27 +2473,45 @@ if mode == "파일 업로드":
 
 elif mode == "DB 직접 연결":
 
+    _conn_cfg = st.session_state["db_conn_config"]
+    _is_connected = _conn_cfg.get("connected", False)
+
+    if not _is_connected:
+        st.warning(
+            "⚠️ DB가 연결되지 않았습니다. 사이드바의 **[Connect to DB]** 버튼으로 먼저 연결하세요.",
+            icon=None,
+        )
+
+    # 연결 정보 fingerprint — 연결이 바뀌면 캐시 자동 갱신
+    _conn_fp = f"{_conn_cfg.get('db_type')}:{_conn_cfg.get('host')}:{_conn_cfg.get('port')}:{_conn_cfg.get('database')}"
+
     @st.cache_data(ttl=300, show_spinner="DB 스키마 조회 중...")
-    def load_db_schema():
+    def load_db_schema(_fp: str):
         import importlib, os
         config_path = os.path.join(os.path.dirname(__file__), "db_config.json")
         if not os.path.exists(config_path):
             return None, "db_config.json 파일이 없습니다."
         try:
-            db_schema = importlib.import_module("db_schema")
-            return db_schema.get_schema(config_path), None
+            db_schema_mod = importlib.import_module("db_schema")
+            return db_schema_mod.get_schema(config_path), None
         except Exception as e:
             return None, str(e)
 
-    if st.button("DB 연결 및 스키마 조회", type="primary"):
-        schema, err = load_db_schema()
+    if st.button("스키마 조회", type="primary", disabled=not _is_connected,
+                 help="사이드바에서 연결한 DB의 테이블 목록을 불러옵니다."):
+        schema_raw, err = load_db_schema(_conn_fp)
         if err:
-            st.error(f"DB 연결 실패: {err}")
+            st.error(f"스키마 조회 실패: {err}")
         else:
-            st.session_state["db_schema"] = schema
-            st.success(f"스키마 조회 완료: {len(schema)}개 테이블")
+            # get_schema() → {"tables": {...}, "joins": [...], "synonyms": {}, "_db_type": "..."}
+            # "tables" 안에 실제 테이블 정보가 있음
+            _tables_dict = schema_raw.get("tables", schema_raw) if isinstance(schema_raw, dict) else {}
+            st.session_state["db_schema_raw"]   = schema_raw       # 전체 원본 보관
+            st.session_state["db_schema"]        = _tables_dict     # 테이블 dict만 저장
+            st.success(f"스키마 조회 완료: {len(_tables_dict)}개 테이블")
 
     if "db_schema" in st.session_state and st.session_state["db_schema"]:
+        # schema = {table_name: {"columns": [...], "pk": [...], "fk": [...]}, ...}
         schema     = st.session_state["db_schema"]
         table_list = sorted(schema.keys())
         col_src, col_tgt = st.columns(2)
@@ -2551,8 +2527,8 @@ elif mode == "DB 직접 연결":
             st.session_state.mapping     = None
             st.session_state.queries     = None
             st.success("메타데이터 로드 완료")
-    else:
-        st.info("위 버튼을 눌러 DB에 연결하세요. (db_config.json 설정 필요)")
+    elif _is_connected:
+        st.info("ℹ️ **스키마 조회** 버튼을 눌러 DB 테이블 목록을 불러오세요.")
 
 
 # ═══════════════════════════════════════════════════════════

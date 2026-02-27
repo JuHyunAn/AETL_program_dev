@@ -184,10 +184,10 @@ python db_schema.py --refresh
 
 ```bash
 # 방법 1
-streamlit run streamlit_app.py
+streamlit run etl_streamlit_app.py
 
 # 방법 2
-python -m streamlit run streamlit_app.py
+python -m streamlit run etl_streamlit_app.py
 ```
 
 실행 후 브라우저에서 `http://localhost:8501` 접속

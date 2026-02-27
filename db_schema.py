@@ -451,6 +451,173 @@ class MariaDBSchemaFetcher(SchemaFetcher):
 
 
 # =============================================================================
+# PostgreSQL 구현체
+# =============================================================================
+class PostgreSQLSchemaFetcher(SchemaFetcher):
+    """
+    PostgreSQL 스키마 조회 구현체 — 다중 스키마(public, public_marts 등) 지원.
+
+    owner 필드 사용법:
+      - 빈값/None : DB의 모든 사용자 스키마를 자동 감지
+      - "public"  : public 스키마만
+      - "public,public_marts" : 쉼표 구분으로 여러 스키마 지정
+
+    테이블 키 규칙:
+      - 단일 스키마(명시 지정) : "TABLE_NAME"
+      - 다중 / 자동감지         : "schema.TABLE_NAME"
+    """
+
+    # PostgreSQL 시스템 스키마 제외 목록
+    _SYSTEM_SCHEMAS = frozenset([
+        "pg_catalog", "information_schema",
+        "pg_toast", "pg_temp_1", "pg_toast_temp_1",
+    ])
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        # schema_filter: 명시 지정 스키마 목록 (None = connect 후 자동 감지)
+        if self.owner:
+            self.schema_filter: Optional[List[str]] = [
+                s.strip() for s in self.owner.split(",") if s.strip()
+            ]
+        else:
+            self.schema_filter = None
+        self._active_schemas: List[str] = []   # connect() 후 결정
+        self._use_prefix: bool = True           # 테이블 키에 "schema." 접두어 여부
+
+    def connect(self):
+        try:
+            import psycopg2
+        except ImportError:
+            raise ImportError("psycopg2 패키지가 설치되지 않았습니다. pip install psycopg2-binary")
+
+        conn_config = self.config["connection"]
+        self.conn = psycopg2.connect(
+            host=conn_config["host"],
+            port=int(conn_config.get("port", 5432)),
+            user=conn_config["user"],
+            password=conn_config["password"],
+            dbname=conn_config["database"],
+        )
+        self.cursor = self.conn.cursor()
+
+        _sf = self.schema_filter          # 로컬 변수로 받으면 Pyright가 None 제외로 narrow
+        if _sf:
+            # 명시 지정 스키마 사용
+            self._active_schemas = list(_sf)
+            # 단일 명시 지정이면 prefix 불필요
+            self._use_prefix = len(self._active_schemas) > 1
+        else:
+            # 시스템 스키마를 제외한 모든 사용자 스키마 자동 감지
+            self.cursor.execute("""
+                SELECT schema_name
+                FROM information_schema.schemata
+                WHERE schema_name NOT IN (
+                    'pg_catalog', 'information_schema',
+                    'pg_toast', 'pg_temp_1', 'pg_toast_temp_1'
+                )
+                  AND schema_name NOT LIKE 'pg_%'
+                ORDER BY schema_name
+            """)
+            self._active_schemas = [row[0] for row in self.cursor.fetchall()]
+            self._use_prefix = True   # 자동 감지는 항상 prefix 사용
+
+    def close(self):
+        if self.cursor:
+            self.cursor.close()
+        if self.conn:
+            self.conn.close()
+
+    # ── 내부 헬퍼 ──────────────────────────────────────────────
+    def _split_table_key(self, table_key: str):
+        """'schema.table' → (schema, table) / 'table' → (active_schema, table)"""
+        if "." in table_key:
+            schema, tbl = table_key.split(".", 1)
+            return schema, tbl
+        schema = self._active_schemas[0] if self._active_schemas else "public"
+        return schema, table_key
+
+    def _make_table_key(self, schema: str, table: str) -> str:
+        return f"{schema}.{table}" if self._use_prefix else table
+
+    # ── 추상 메서드 구현 ───────────────────────────────────────
+    def get_tables(self) -> List[str]:
+        if not self._active_schemas:
+            return []
+
+        placeholders = ",".join(["%s"] * len(self._active_schemas))
+        types = "('BASE TABLE', 'VIEW')" if self.include_views else "('BASE TABLE')"
+        sql = f"""
+            SELECT table_schema, table_name
+            FROM information_schema.tables
+            WHERE table_schema IN ({placeholders})
+              AND table_type IN {types}
+            ORDER BY table_schema, table_name
+        """
+        self.cursor.execute(sql, self._active_schemas)
+        return [self._make_table_key(row[0], row[1]) for row in self.cursor.fetchall()]
+
+    def get_columns(self, table_name: str) -> List[str]:
+        schema, tbl = self._split_table_key(table_name)
+        self.cursor.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = %s AND table_name = %s
+            ORDER BY ordinal_position
+        """, (schema, tbl))
+        return [row[0] for row in self.cursor.fetchall()]
+
+    def get_primary_keys(self, table_name: str) -> List[str]:
+        schema, tbl = self._split_table_key(table_name)
+        self.cursor.execute("""
+            SELECT kcu.column_name
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu
+                ON tc.constraint_name = kcu.constraint_name
+               AND tc.table_schema    = kcu.table_schema
+               AND tc.table_name      = kcu.table_name
+            WHERE tc.table_schema    = %s
+              AND tc.table_name      = %s
+              AND tc.constraint_type = 'PRIMARY KEY'
+            ORDER BY kcu.ordinal_position
+        """, (schema, tbl))
+        return [row[0] for row in self.cursor.fetchall()]
+
+    def get_foreign_keys(self, table_name: str) -> List[Dict[str, str]]:
+        schema, tbl = self._split_table_key(table_name)
+        self.cursor.execute("""
+            SELECT
+                kcu.column_name              AS fk_column,
+                ccu.table_schema             AS ref_schema,
+                ccu.table_name               AS ref_table,
+                ccu.column_name              AS ref_column
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu
+                ON tc.constraint_name  = kcu.constraint_name
+               AND tc.table_schema     = kcu.table_schema
+            JOIN information_schema.referential_constraints rc
+                ON tc.constraint_name  = rc.constraint_name
+               AND tc.table_schema     = rc.constraint_schema
+            JOIN information_schema.key_column_usage ccu
+                ON rc.unique_constraint_name   = ccu.constraint_name
+               AND rc.unique_constraint_schema = ccu.constraint_schema
+               AND kcu.ordinal_position        = ccu.ordinal_position
+            WHERE tc.table_schema     = %s
+              AND tc.table_name       = %s
+              AND tc.constraint_type  = 'FOREIGN KEY'
+            ORDER BY kcu.ordinal_position
+        """, (schema, tbl))
+        return [
+            {
+                "col": row[0],
+                "ref_table": self._make_table_key(row[1], row[2]),
+                "ref_col": row[3],
+            }
+            for row in self.cursor.fetchall()
+        ]
+
+
+# =============================================================================
 # 팩토리 함수
 # =============================================================================
 def get_fetcher(config: Dict[str, Any]) -> SchemaFetcher:
@@ -469,6 +636,8 @@ def get_fetcher(config: Dict[str, Any]) -> SchemaFetcher:
         return OracleSchemaFetcher(config)
     elif db_type in ("mariadb", "mysql"):
         return MariaDBSchemaFetcher(config)
+    elif db_type in ("postgresql", "postgres"):
+        return PostgreSQLSchemaFetcher(config)
     else:
         raise ValueError(f"지원하지 않는 DB 타입입니다: {db_type}")
 
