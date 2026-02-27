@@ -11,6 +11,7 @@ AETL Export Engine  —  v2.1
 
 from __future__ import annotations
 
+import csv
 import io
 import json
 from datetime import datetime
@@ -490,3 +491,62 @@ def generate_validation_report(
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# ─────────────────────────────────────────────────────────────
+# 4. JSON / CSV Raw Export  (Stage 2)
+# ─────────────────────────────────────────────────────────────
+
+def generate_mapping_json(
+    source_meta: dict,
+    target_meta: dict,
+    column_mappings: list[dict],
+    load_sql: str = "",
+    validation_sqls: list[dict] | None = None,
+    mapping_id: str = "",
+) -> str:
+    """
+    매핑 결과 전체를 JSON 문자열로 반환합니다.
+    현업 엔지니어가 자체 스크립트(Pandas 등)로 가공할 수 있는 Raw Data 형식입니다.
+    """
+    data = {
+        "mapping_id":     mapping_id or f"MAP_{datetime.now():%Y%m%d%H%M%S}",
+        "created_at":     datetime.now().isoformat(),
+        "source_table":   source_meta.get("table_name", ""),
+        "target_table":   target_meta.get("table_name", ""),
+        "source_columns": source_meta.get("columns", []),
+        "target_columns": target_meta.get("columns", []),
+        "pk_columns":     target_meta.get("pk_columns", []),
+        "column_mappings": column_mappings,
+        "load_sql":       load_sql,
+        "validation_sqls": validation_sqls or [],
+    }
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def generate_mapping_csv(
+    source_meta: dict,
+    target_meta: dict,
+    column_mappings: list[dict],
+) -> str:
+    """
+    컬럼 매핑을 CSV 문자열로 반환합니다.
+    엑셀 매크로나 Pandas로 직접 가공하기 가장 쉬운 형식입니다.
+    """
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["No", "소스테이블", "소스컬럼", "타겟테이블", "타겟컬럼",
+                     "변환규칙", "변환유형", "비고"])
+    src = source_meta.get("table_name", "")
+    tgt = target_meta.get("table_name", "")
+    for i, m in enumerate(column_mappings, 1):
+        writer.writerow([
+            i, src,
+            m.get("source_col", ""),
+            tgt,
+            m.get("target_col", ""),
+            m.get("transform", ""),
+            m.get("transform_type", "1:1"),
+            m.get("description", ""),
+        ])
+    return output.getvalue()

@@ -654,7 +654,9 @@ for _k in ("exec_result", "exec_diagnosis", "exec_sql_type"):
         st.session_state[_k] = None
 
 # 매핑 자동화 상태
-for _k in ("export_excel_bytes", "export_ddl", "export_merge_sql", "export_report_bytes"):
+for _k in ("export_excel_bytes", "export_ddl", "export_merge_sql", "export_report_bytes",
+           "export_json_str", "export_csv_str",
+           "tpl_structure", "tpl_bytes", "tpl_suggestions"):
     if _k not in st.session_state:
         st.session_state[_k] = None
 
@@ -667,6 +669,10 @@ for _k in ("designer_entities", "designer_design", "designer_ddl"):
 for _k in ("lineage_result", "lineage_graph", "lineage_explanation"):
     if _k not in st.session_state:
         st.session_state[_k] = None
+
+# ETL Flow Map — 등록된 매핑 목록
+if "flow_map_mappings" not in st.session_state:
+    st.session_state["flow_map_mappings"] = []  # list[dict] — build_flow_data_from_mappings 입력 형식
 
 # DB 연결 설정 (Agent/Profile 페이지용)
 if "db_conn_config" not in st.session_state:
@@ -707,7 +713,7 @@ with st.sidebar:
     page = st.radio(
         "페이지",
         options=["검증 쿼리 생성", "AI Agent", "데이터 프로파일",
-                 "검증 실행", "매핑 자동화", "DW 설계", "리니지 분석"],
+                 "검증 실행", "매핑 자동화", "DW 설계", "리니지 분석", "ETL Flow Map"],
         index=0,
         label_visibility="collapsed",
     )
@@ -816,7 +822,7 @@ AI가 Star Schema를 자동 설계합니다.<br><br>
 · ODS / Fact / Dim / DM 테이블<br>
 · Mermaid ERD + DDL
 </div>""", unsafe_allow_html=True)
-    else:  # 리니지 분석
+    elif page == "리니지 분석":
         st.markdown("""
 <div style="font-size:11px;line-height:1.8;color:#475569;">
 <b style="color:#0070C0;font-size:10px;">리니지 분석 안내</b><br><br>
@@ -827,6 +833,18 @@ SQL에서 데이터 흐름을 자동 추적합니다.<br><br>
 <b style="color:#374151;font-weight:600;">출력</b><br>
 · 컬럼/테이블 리니지 시각화<br>
 · Forward/Backward 영향도 분석
+</div>""", unsafe_allow_html=True)
+    else:  # ETL Flow Map
+        st.markdown("""
+<div style="font-size:11px;line-height:1.8;color:#475569;">
+<b style="color:#0070C0;font-size:10px;">ETL Flow Map 안내</b><br><br>
+등록된 매핑을 인터랙티브<br>파이프라인 그래프로 시각화합니다.<br><br>
+<b style="color:#374151;font-weight:600;">기능</b><br>
+· 테이블 노드 클릭 → 컬럼 펼치기<br>
+· 레이어별 색상 구분<br>
+· (ODS → DW → DM 방향 자동 배치)<br><br>
+<b style="color:#374151;font-weight:600;">등록 방법</b><br>
+매핑 자동화 페이지에서<br>산출물 생성 시 자동 등록
 </div>""", unsafe_allow_html=True)
 
 
@@ -1087,6 +1105,9 @@ _page_meta = {
     "리니지 분석":    ("SQL 데이터 리니지 분석",
                        "SQL에서 테이블·컬럼 간 데이터 흐름을 추적하고 Mermaid 다이어그램으로 시각화합니다.",
                        "Lineage Engine"),
+    "ETL Flow Map":   ("ETL Pipeline Flow Map",
+                       "등록된 매핑 기반 파이프라인을 React Flow 인터랙티브 그래프로 시각화합니다.",
+                       "Flow Map"),
 }
 _title, _subtitle, _badge_text = _page_meta.get(page, ("ETL Validator", "", ""))
 st.markdown(f"""
@@ -1485,40 +1506,49 @@ if page == "검증 실행":
 
 
 # ═══════════════════════════════════════════════════════════
-# 매핑 자동화 페이지
+# 매핑 자동화 페이지  (v2 — Single Source of Truth + Template Profile)
 # ═══════════════════════════════════════════════════════════
 if page == "매핑 자동화":
     import pandas as pd
+    from aetl_export import (
+        generate_mapping_excel, generate_merge_sql, generate_ddl,
+        generate_validation_report, generate_mapping_json, generate_mapping_csv,
+    )
+    from etl_sql_generator import generate_validation_queries_no_llm
+    import aetl_template_profile as tpl_engine
 
-    st.markdown('<div class="step-row"><span class="step-num">1</span><span class="step-text">소스 / 타겟 메타데이터</span></div>', unsafe_allow_html=True)
+    # ── Step 1: 메타데이터 ──────────────────────────────────
+    st.markdown('<div class="step-row"><span class="step-num">1</span>'
+                '<span class="step-text">소스 / 타겟 메타데이터</span></div>',
+                unsafe_allow_html=True)
 
     src_meta = st.session_state.get("source_meta")
     tgt_meta = st.session_state.get("target_meta")
 
     if not src_meta or not tgt_meta:
-        st.info("소스/타겟 메타데이터가 없습니다. **검증 쿼리 생성** 페이지에서 파일을 업로드하거나 샘플을 로드한 후 이 페이지를 이용하세요.")
+        st.info("소스/타겟 메타데이터가 없습니다. **검증 쿼리 생성** 페이지에서 파일을 업로드하거나 샘플을 로드하세요.")
         if st.button("샘플 데이터 로드", key="mapping_sample_load"):
             st.session_state.source_meta = {
                 "table_name": "ODS_ORDER",
                 "columns": [
-                    {"name": "ORDER_ID",  "type": "VARCHAR2(20)",  "pk": True,  "nullable": False, "description": "주문ID"},
-                    {"name": "CUST_ID",   "type": "VARCHAR2(20)",  "pk": False, "nullable": False, "description": "고객ID"},
-                    {"name": "ORDER_AMT", "type": "NUMBER(15,2)",  "pk": False, "nullable": True,  "description": "주문금액"},
-                    {"name": "ORDER_DT",  "type": "DATE",          "pk": False, "nullable": False, "description": "주문일자"},
-                    {"name": "STATUS_CD", "type": "CHAR(1)",       "pk": False, "nullable": False, "description": "상태코드"},
+                    {"name": "ORDER_ID",  "type": "VARCHAR2(20)", "nullable": False, "description": "주문ID"},
+                    {"name": "CUST_ID",   "type": "VARCHAR2(20)", "nullable": False, "description": "고객ID"},
+                    {"name": "ORDER_AMT", "type": "NUMBER(15,2)", "nullable": True,  "description": "주문금액"},
+                    {"name": "ORDER_DT",  "type": "DATE",         "nullable": False, "description": "주문일자"},
+                    {"name": "STATUS_CD", "type": "CHAR(1)",      "nullable": False, "description": "상태코드"},
                 ],
                 "pk_columns": ["ORDER_ID"],
             }
             st.session_state.target_meta = {
                 "table_name": "DW_FACT_ORDER",
                 "columns": [
-                    {"name": "ORDER_SK",   "type": "NUMBER(10)",   "pk": True,  "nullable": False, "description": "주문 대리키"},
-                    {"name": "ORDER_ID",   "type": "VARCHAR2(20)", "pk": False, "nullable": False, "description": "주문ID"},
-                    {"name": "CUST_ID",    "type": "VARCHAR2(20)", "pk": False, "nullable": False, "description": "고객ID"},
-                    {"name": "ORDER_AMT",  "type": "NUMBER(15,2)", "pk": False, "nullable": True,  "description": "주문금액"},
-                    {"name": "ORDER_DATE", "type": "DATE",         "pk": False, "nullable": False, "description": "주문일자"},
-                    {"name": "STATUS_CD",  "type": "CHAR(1)",      "pk": False, "nullable": False, "description": "상태코드"},
-                    {"name": "ETL_DT",     "type": "TIMESTAMP",    "pk": False, "nullable": True,  "description": "ETL 적재일시"},
+                    {"name": "ORDER_SK",   "type": "NUMBER(10)",   "nullable": False, "description": "주문 대리키"},
+                    {"name": "ORDER_ID",   "type": "VARCHAR2(20)", "nullable": False, "description": "주문ID"},
+                    {"name": "CUST_ID",    "type": "VARCHAR2(20)", "nullable": False, "description": "고객ID"},
+                    {"name": "ORDER_AMT",  "type": "NUMBER(15,2)", "nullable": True,  "description": "주문금액"},
+                    {"name": "ORDER_DATE", "type": "DATE",         "nullable": False, "description": "주문일자"},
+                    {"name": "STATUS_CD",  "type": "CHAR(1)",      "nullable": False, "description": "상태코드"},
+                    {"name": "ETL_DT",     "type": "TIMESTAMP",    "nullable": True,  "description": "ETL 적재일시"},
                 ],
                 "pk_columns": ["ORDER_SK"],
             }
@@ -1530,14 +1560,17 @@ if page == "매핑 자동화":
     with col_src_m:
         render_metadata_table(src_meta, "source")
     with col_arr_m:
-        st.markdown("<div style='text-align:center;padding-top:56px;font-size:20px;color:#A8BCCC;'>→</div>", unsafe_allow_html=True)
+        st.markdown("<div style='text-align:center;padding-top:56px;font-size:20px;color:#A8BCCC;'>→</div>",
+                    unsafe_allow_html=True)
     with col_tgt_m:
         render_metadata_table(tgt_meta, "target")
 
-    st.markdown('<div class="step-row"><span class="step-num">2</span><span class="step-text">컬럼 매핑 편집</span></div>', unsafe_allow_html=True)
-    st.caption("아래 표에서 매핑 관계를 직접 편집할 수 있습니다. 행 추가·삭제도 가능합니다.")
+    # ── Step 2: 컬럼 매핑 편집 (Single Source of Truth) ────
+    st.markdown('<div class="step-row"><span class="step-num">2</span>'
+                '<span class="step-text">컬럼 매핑 편집 — Single Source of Truth</span></div>',
+                unsafe_allow_html=True)
+    st.caption("이 표가 모든 산출물의 기반입니다. 수정하면 아래 MERGE SQL 미리보기가 즉시 반영됩니다.")
 
-    # 기본 매핑 빌드 (동일 컬럼명 자동 매핑)
     existing_mapping = st.session_state.get("mapping") or []
     src_col_names = {c["name"] for c in src_meta["columns"]}
 
@@ -1580,6 +1613,7 @@ if page == "매핑 자동화":
         num_rows="dynamic",
     )
 
+    # SOT: 매핑 테이블에서 파생된 col_mappings — 모든 산출물의 원천
     col_mappings = [
         {
             "target_col":  str(row.get("타겟 컬럼", "")),
@@ -1589,9 +1623,22 @@ if page == "매핑 자동화":
             "description": str(row.get("비고", "")),
         }
         for _, row in edited_mapping.iterrows()
+        if str(row.get("타겟 컬럼", "")).strip()
     ]
 
-    st.markdown('<div class="step-row"><span class="step-num">3</span><span class="step-text">문서 생성</span></div>', unsafe_allow_html=True)
+    # MERGE SQL 자동 미리보기 (버튼 없이 실시간 반영)
+    _db_type_preview = st.session_state.get("db_conn_config", {}).get("db_type", "oracle")
+    with st.expander("MERGE SQL 미리보기 (매핑 수정 시 자동 갱신)", expanded=False):
+        try:
+            _preview_sql = generate_merge_sql(src_meta, tgt_meta, col_mappings, _db_type_preview)
+            st.code(_preview_sql, language="sql")
+        except Exception as _e:
+            st.warning(f"미리보기 생성 실패: {_e}")
+
+    # ── Step 3: 생성 설정 + 전체 산출물 생성 ────────────────
+    st.markdown('<div class="step-row"><span class="step-num">3</span>'
+                '<span class="step-text">산출물 생성</span></div>',
+                unsafe_allow_html=True)
 
     col_mid, col_auth, col_dbtype_exp = st.columns([3, 3, 2])
     with col_mid:
@@ -1606,82 +1653,321 @@ if page == "매핑 자동화":
             key="export_db_type",
         )
 
-    col_b1, col_b2, col_b3, col_b4 = st.columns(4)
-    with col_b1:
-        if st.button("매핑 Excel 생성", key="gen_mapping_excel", type="primary"):
-            with st.spinner("Excel 생성 중..."):
-                try:
-                    from aetl_export import generate_mapping_excel
-                    from etl_sql_generator import generate_validation_queries_no_llm
-                    val_qs = generate_validation_queries_no_llm(src_meta, tgt_meta, col_mappings, export_db_type)
-                    excel_bytes = generate_mapping_excel(
-                        src_meta, tgt_meta, col_mappings, "", val_qs, mapping_id, author
-                    )
-                    st.session_state["export_excel_bytes"] = excel_bytes
-                    st.success("Excel 생성 완료!")
-                except Exception as e:
-                    st.error(f"Excel 생성 오류: {e}")
-                    st.code(traceback.format_exc())
-    with col_b2:
-        if st.button("DDL 생성", key="gen_ddl_export", type="secondary"):
-            with st.spinner("DDL 생성 중..."):
-                try:
-                    from aetl_export import generate_ddl
-                    ddl_src = generate_ddl(src_meta, export_db_type)
-                    ddl_tgt = generate_ddl(tgt_meta, export_db_type)
-                    st.session_state["export_ddl"] = f"-- Source\n{ddl_src}\n\n-- Target\n{ddl_tgt}"
-                    st.success("DDL 생성 완료!")
-                except Exception as e:
-                    st.error(f"DDL 생성 오류: {e}")
-    with col_b3:
-        if st.button("MERGE SQL 생성", key="gen_merge_sql", type="secondary"):
-            with st.spinner("MERGE SQL 생성 중..."):
-                try:
-                    from aetl_export import generate_merge_sql
-                    st.session_state["export_merge_sql"] = generate_merge_sql(
-                        src_meta, tgt_meta, col_mappings, export_db_type
-                    )
-                    st.success("MERGE SQL 생성 완료!")
-                except Exception as e:
-                    st.error(f"MERGE SQL 생성 오류: {e}")
-    with col_b4:
-        if st.button("검증 리포트", key="gen_val_report", type="secondary"):
-            with st.spinner("리포트 생성 중..."):
-                try:
-                    from aetl_export import generate_validation_report
-                    sample_results = [{"rule_name": "건수 비교", "status": "PASS",
-                                       "actual_value": "—", "expected_value": "—", "sql": ""}]
-                    report_bytes = generate_validation_report(
-                        sample_results, mapping_id, src_meta["table_name"], tgt_meta["table_name"]
-                    )
-                    st.session_state["export_report_bytes"] = report_bytes
-                    st.success("검증 리포트 생성 완료!")
-                except Exception as e:
-                    st.error(f"리포트 생성 오류: {e}")
+    # ── [전체 산출물 생성] — 단일 버튼으로 모든 파일 생성 ──
+    if st.button("전체 산출물 생성", key="gen_all_exports", type="primary", use_container_width=True):
+        with st.spinner("산출물 생성 중..."):
+            try:
+                # 1) MERGE SQL (SOT → 파생)
+                merge_sql = generate_merge_sql(src_meta, tgt_meta, col_mappings, export_db_type)
+                st.session_state["export_merge_sql"] = merge_sql
 
+                # 2) 검증 SQL
+                val_qs = generate_validation_queries_no_llm(src_meta, tgt_meta, col_mappings, export_db_type)
+
+                # 3) 매핑정의서 Excel (MERGE SQL 포함 — Stage 1 fix)
+                st.session_state["export_excel_bytes"] = generate_mapping_excel(
+                    src_meta, tgt_meta, col_mappings,
+                    merge_sql,   # ← Stage 1: 빈 문자열이 아닌 실제 MERGE SQL 전달
+                    val_qs, mapping_id, author,
+                )
+
+                # 4) DDL
+                ddl_src = generate_ddl(src_meta, export_db_type)
+                ddl_tgt = generate_ddl(tgt_meta, export_db_type)
+                st.session_state["export_ddl"] = f"-- Source\n{ddl_src}\n\n-- Target\n{ddl_tgt}"
+
+                # 5) 검증 리포트 (빈 결과로 초기 생성)
+                sample_results = [{"rule_name": "건수 비교", "status": "PASS",
+                                   "actual_value": "—", "expected_value": "—", "sql": ""}]
+                st.session_state["export_report_bytes"] = generate_validation_report(
+                    sample_results, mapping_id, src_meta["table_name"], tgt_meta["table_name"]
+                )
+
+                # 6) JSON raw export (Stage 2)
+                st.session_state["export_json_str"] = generate_mapping_json(
+                    src_meta, tgt_meta, col_mappings, merge_sql, val_qs, mapping_id
+                )
+
+                # 7) CSV raw export (Stage 2)
+                st.session_state["export_csv_str"] = generate_mapping_csv(
+                    src_meta, tgt_meta, col_mappings
+                )
+
+                # 8) ETL Flow Map 등록 (SOT 기반 mapping_result 추가/업데이트)
+                _flow_entry = {
+                    "mapping_id":  mapping_id,
+                    "source_meta": src_meta,
+                    "target_meta": tgt_meta,
+                    "load_type":   "MERGE",
+                }
+                _existing = st.session_state["flow_map_mappings"]
+                _ids = [m["mapping_id"] for m in _existing]
+                if mapping_id in _ids:
+                    _existing[_ids.index(mapping_id)] = _flow_entry
+                else:
+                    _existing.append(_flow_entry)
+                st.session_state["flow_map_mappings"] = _existing
+
+                st.success("전체 산출물 생성 완료! 아래에서 다운로드하세요.")
+            except Exception as e:
+                st.error(f"생성 오류: {e}")
+                st.code(traceback.format_exc())
+
+    # ── 다운로드 버튼 ────────────────────────────────────────
     st.divider()
-    if st.session_state["export_excel_bytes"]:
-        st.download_button(
-            "📥 매핑정의서 Excel 다운로드",
-            data=st.session_state["export_excel_bytes"],
-            file_name=f"{mapping_id}_mapping.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    dl_cols = st.columns(4)
+    with dl_cols[0]:
+        if st.session_state["export_excel_bytes"]:
+            st.download_button(
+                "매핑정의서 Excel",
+                data=st.session_state["export_excel_bytes"],
+                file_name=f"{mapping_id}_mapping.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+    with dl_cols[1]:
+        if st.session_state["export_ddl"]:
+            st.download_button(
+                "DDL Script (.sql)",
+                data=st.session_state["export_ddl"],
+                file_name=f"{mapping_id}_ddl.sql",
+                mime="text/plain",
+                use_container_width=True,
+            )
+    with dl_cols[2]:
+        if st.session_state["export_merge_sql"]:
+            st.download_button(
+                "MERGE SQL (.sql)",
+                data=st.session_state["export_merge_sql"],
+                file_name=f"{mapping_id}_merge.sql",
+                mime="text/plain",
+                use_container_width=True,
+            )
+    with dl_cols[3]:
+        if st.session_state["export_report_bytes"]:
+            st.download_button(
+                "검증 리포트 Excel",
+                data=st.session_state["export_report_bytes"],
+                file_name=f"{mapping_id}_validation_report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+    # Raw export (Stage 2)
+    raw_cols = st.columns(2)
+    with raw_cols[0]:
+        if st.session_state["export_json_str"]:
+            st.download_button(
+                "JSON Raw Export",
+                data=st.session_state["export_json_str"],
+                file_name=f"{mapping_id}_mapping.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+    with raw_cols[1]:
+        if st.session_state["export_csv_str"]:
+            st.download_button(
+                "CSV Raw Export",
+                data=st.session_state["export_csv_str"],
+                file_name=f"{mapping_id}_mapping.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+    # SQL 미리보기 (토글)
+    if st.session_state["export_ddl"] or st.session_state["export_merge_sql"]:
+        with st.expander("생성된 SQL 보기", expanded=False):
+            if st.session_state["export_ddl"]:
+                st.markdown("**DDL**")
+                st.code(st.session_state["export_ddl"], language="sql")
+            if st.session_state["export_merge_sql"]:
+                st.markdown("**MERGE SQL**")
+                st.code(st.session_state["export_merge_sql"], language="sql")
+
+    # ── Step 4: Template Profile (Stage 3) ──────────────────
+    st.divider()
+    st.markdown('<div class="step-row"><span class="step-num">4</span>'
+                '<span class="step-text">Template Profile — 회사 양식 등록 & 적용</span></div>',
+                unsafe_allow_html=True)
+    st.caption("회사 고유 엑셀 양식을 한 번 등록하면, 이후 매핑 데이터를 해당 양식에 자동으로 기입합니다.")
+
+    tpl_tab_apply, tpl_tab_register = st.tabs(["기존 프로파일 적용", "새 양식 등록"])
+
+    # ── 탭 A: 기존 프로파일로 Export ──
+    with tpl_tab_apply:
+        profiles = tpl_engine.list_profiles()
+        if not profiles:
+            st.info("등록된 프로파일이 없습니다. '새 양식 등록' 탭에서 회사 양식을 등록하세요.")
+        else:
+            col_p1, col_p2 = st.columns([3, 1])
+            with col_p1:
+                selected_profile = st.selectbox("프로파일 선택", options=profiles, key="tpl_select")
+            with col_p2:
+                if st.button("프로파일 삭제", key="tpl_delete", type="secondary"):
+                    tpl_engine.delete_profile(selected_profile)
+                    st.success(f"'{selected_profile}' 삭제 완료")
+                    st.rerun()
+
+            if st.button("이 양식으로 Export", key="tpl_apply_btn", type="primary"):
+                with st.spinner("양식에 데이터 기입 중..."):
+                    try:
+                        profile_data, tpl_bytes = tpl_engine.load_profile(selected_profile)
+                        if not profile_data:
+                            st.error("프로파일 파일을 찾을 수 없습니다.")
+                        else:
+                            # SOT에서 MERGE SQL / 검증 SQL 파생
+                            _merge_sql = generate_merge_sql(src_meta, tgt_meta, col_mappings, export_db_type)
+                            _val_qs    = generate_validation_queries_no_llm(src_meta, tgt_meta, col_mappings, export_db_type)
+                            mapping_result = {
+                                "mapping_id":      mapping_id,
+                                "author":          author,
+                                "load_type":       "MERGE",
+                                "source_meta":     src_meta,
+                                "target_meta":     tgt_meta,
+                                "column_mappings": col_mappings,
+                                "load_sql":        _merge_sql,
+                                "validation_sqls": _val_qs if isinstance(_val_qs, list)
+                                                   else [{"name": k, "sql": v.get("sql",""), "expected": ""}
+                                                         for k, v in _val_qs.items()],
+                            }
+                            result_bytes = tpl_engine.apply_profile(profile_data, tpl_bytes, mapping_result)
+                            st.download_button(
+                                f"'{selected_profile}' 양식으로 다운로드",
+                                data=result_bytes,
+                                file_name=f"{mapping_id}_{selected_profile}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            )
+                            st.success("기입 완료! 다운로드 버튼을 클릭하세요.")
+                    except Exception as e:
+                        st.error(f"Template 적용 오류: {e}")
+                        st.code(traceback.format_exc())
+
+    # ── 탭 B: 새 양식 등록 ──
+    with tpl_tab_register:
+        st.caption("빈 엑셀 양식을 업로드하면 AETL이 헤더를 분석하고 필드 매핑을 제안합니다. 확인 후 저장하세요.")
+
+        tpl_upload = st.file_uploader(
+            "회사 빈 양식 업로드 (.xlsx)",
+            type=["xlsx", "xls"],
+            key="tpl_upload_file",
         )
-    if st.session_state["export_ddl"]:
-        st.code(st.session_state["export_ddl"], language="sql")
-        st.download_button("📥 DDL 다운로드", data=st.session_state["export_ddl"],
-                           file_name=f"{mapping_id}_ddl.sql", mime="text/plain")
-    if st.session_state["export_merge_sql"]:
-        st.code(st.session_state["export_merge_sql"], language="sql")
-        st.download_button("📥 MERGE SQL 다운로드", data=st.session_state["export_merge_sql"],
-                           file_name=f"{mapping_id}_merge.sql", mime="text/plain")
-    if st.session_state["export_report_bytes"]:
-        st.download_button(
-            "📥 검증 리포트 Excel 다운로드",
-            data=st.session_state["export_report_bytes"],
-            file_name=f"{mapping_id}_validation_report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+
+        if tpl_upload:
+            tpl_bytes_raw = tpl_upload.read()
+
+            if st.button("양식 분석", key="tpl_analyze_btn", type="primary"):
+                with st.spinner("헤더 분석 중..."):
+                    try:
+                        structure = tpl_engine.detect_template_structure(tpl_bytes_raw)
+                        st.session_state["tpl_structure"] = structure
+                        st.session_state["tpl_bytes"]     = tpl_bytes_raw
+
+                        # 시트별 초안 제안 생성
+                        suggestions: dict[str, dict] = {}
+                        for sname, sinfo in structure.items():
+                            suggestions[sname] = tpl_engine.suggest_field_mapping(sinfo["headers"])
+                        st.session_state["tpl_suggestions"] = suggestions
+                        st.success(f"분석 완료 — {len(structure)}개 시트 감지")
+                    except Exception as e:
+                        st.error(f"분석 오류: {e}")
+
+        if st.session_state.get("tpl_structure"):
+            structure   = st.session_state["tpl_structure"]
+            suggestions = st.session_state.get("tpl_suggestions", {})
+
+            st.markdown("**헤더 → AETL 필드 매핑 확인** (틀린 항목은 드롭다운으로 수정하세요)")
+
+            field_options = ["__ignore__"] + list(tpl_engine.AETL_FIELDS.keys())
+            field_labels  = {k: f"{k}  ({v})" for k, v in tpl_engine.AETL_FIELDS.items()}
+            field_labels["__ignore__"] = "— 무시 —"
+
+            sheet_configs_final: list[dict] = []
+
+            for sheet_name, sinfo in structure.items():
+                with st.expander(f"시트: {sheet_name}  ({len(sinfo['headers'])}개 헤더)", expanded=True):
+                    col_sheet_type, _ = st.columns([2, 3])
+                    with col_sheet_type:
+                        sheet_type = st.selectbox(
+                            "시트 유형",
+                            options=["column_mapping", "overview", "sql_load", "sql_validation", "(제외)"],
+                            key=f"tpl_stype_{sheet_name}",
+                            help="컬럼 매핑 반복 행: column_mapping / 개요 단일값: overview / SQL블록: sql_load/sql_validation",
+                        )
+
+                    if sheet_type == "(제외)":
+                        continue
+
+                    col_field_map: dict[str, str] = {}
+                    header_row = sinfo.get("header_row", 1)
+
+                    if sheet_type in ("sql_load", "sql_validation"):
+                        sql_row = st.number_input("SQL 기입 행", min_value=1, value=header_row + 1,
+                                                  key=f"tpl_sqlrow_{sheet_name}")
+                        sql_col = st.number_input("SQL 기입 열", min_value=1, value=1,
+                                                  key=f"tpl_sqlcol_{sheet_name}")
+                        sheet_configs_final.append({
+                            "sheet_name": sheet_name,
+                            "sheet_type": sheet_type,
+                            "header_row": header_row,
+                            "sql_cell":   {"row": int(sql_row), "col": int(sql_col)},
+                            "col_field_map": {},
+                        })
+                        continue
+
+                    # 헤더별 필드 선택
+                    hdr_cols = st.columns(min(4, len(sinfo["headers"])))
+                    for idx, hdr in enumerate(sinfo["headers"]):
+                        col_idx = str(hdr["col"])
+                        suggested = suggestions.get(sheet_name, {}).get(col_idx, "__ignore__")
+                        with hdr_cols[idx % len(hdr_cols)]:
+                            chosen = st.selectbox(
+                                f'열{hdr["col"]}: "{hdr["cell_value"]}"',
+                                options=field_options,
+                                index=field_options.index(suggested) if suggested in field_options else 0,
+                                format_func=lambda k: field_labels.get(k, k),
+                                key=f"tpl_field_{sheet_name}_{col_idx}",
+                            )
+                        col_field_map[col_idx] = chosen
+
+                    data_start = header_row + 1
+                    if sheet_type == "column_mapping":
+                        data_start = st.number_input(
+                            "데이터 시작 행 (헤더 다음 행)",
+                            min_value=1, value=header_row + 1,
+                            key=f"tpl_dstart_{sheet_name}",
+                        )
+
+                    sheet_configs_final.append({
+                        "sheet_name":    sheet_name,
+                        "sheet_type":    sheet_type,
+                        "header_row":    header_row,
+                        "data_start_row": int(data_start),
+                        "col_field_map": col_field_map,
+                    })
+
+            st.divider()
+            col_pname, col_psave = st.columns([3, 1])
+            with col_pname:
+                new_profile_name = st.text_input("프로파일 이름", value="my_company_template",
+                                                  key="tpl_new_name")
+            with col_psave:
+                st.markdown("<div style='padding-top:28px'></div>", unsafe_allow_html=True)
+                if st.button("프로파일 저장", key="tpl_save_btn", type="primary"):
+                    if not new_profile_name.strip():
+                        st.error("프로파일 이름을 입력하세요.")
+                    elif not sheet_configs_final:
+                        st.error("저장할 시트 설정이 없습니다.")
+                    else:
+                        tpl_engine.save_profile(
+                            new_profile_name.strip(),
+                            sheet_configs_final,
+                            st.session_state["tpl_bytes"],
+                        )
+                        st.success(f"프로파일 '{new_profile_name}' 저장 완료!")
+                        st.session_state["tpl_structure"]  = None
+                        st.session_state["tpl_bytes"]      = None
+                        st.session_state["tpl_suggestions"] = None
+                        st.rerun()
 
     st.stop()
 
@@ -2002,6 +2288,89 @@ if page == "리니지 분석":
                 f'{st.session_state["lineage_explanation"]}</div></div>',
                 unsafe_allow_html=True,
             )
+
+    st.stop()
+
+
+# ═══════════════════════════════════════════════════════════
+# ETL Flow Map 페이지
+# ═══════════════════════════════════════════════════════════
+if page == "ETL Flow Map":
+    from etl_flow_component import etl_flow_map, build_flow_data_from_mappings
+
+    mappings = st.session_state.get("flow_map_mappings", [])
+
+    # ── 컨트롤 바 ─────────────────────────────────────────
+    ctrl_cols = st.columns([2, 2, 1, 1])
+    with ctrl_cols[0]:
+        direction = st.selectbox(
+            "방향", options=["LR", "TB"],
+            format_func=lambda x: "좌→우 (LR)" if x == "LR" else "위→아래 (TB)",
+            key="flowmap_direction",
+        )
+    with ctrl_cols[1]:
+        height = st.slider("높이 (px)", min_value=300, max_value=900, value=600, step=50,
+                           key="flowmap_height")
+    with ctrl_cols[2]:
+        if st.button("전체 초기화", key="btn_flowmap_clear", type="secondary"):
+            st.session_state["flow_map_mappings"] = []
+            st.rerun()
+    with ctrl_cols[3]:
+        st.metric("등록 매핑", f"{len(mappings)}건")
+
+    st.divider()
+
+    # ── 빈 상태 안내 ──────────────────────────────────────
+    if not mappings:
+        st.info(
+            "등록된 매핑이 없습니다.  \n"
+            "**매핑 자동화** 페이지에서 '전체 산출물 생성'을 실행하면 자동으로 등록됩니다.",
+            icon="ℹ️",
+        )
+    else:
+        # ── 노드/엣지 빌드 ────────────────────────────────
+        nodes, edges = build_flow_data_from_mappings(mappings)
+
+        # ── React Flow 컴포넌트 렌더링 ────────────────────
+        clicked = etl_flow_map(
+            nodes=nodes,
+            edges=edges,
+            height=height,
+            direction=direction,
+            key="etl_flow_map_main",
+        )
+
+        # ── 클릭된 노드 정보 표시 ────────────────────────
+        if clicked and clicked.get("clicked_node"):
+            node_id = clicked["clicked_node"]
+            node_info = next((n for n in nodes if n["id"] == node_id), None)
+            if node_info:
+                st.divider()
+                st.markdown(
+                    f'<div class="step-row"><span class="step-num">i</span>'
+                    f'<span class="step-text">선택 노드: <code>{node_id}</code> '
+                    f'({node_info.get("layer","").upper()} · {node_info.get("col_count",0)}열)</span></div>',
+                    unsafe_allow_html=True,
+                )
+                if node_info.get("columns"):
+                    import pandas as pd
+                    df_cols = pd.DataFrame(node_info["columns"])
+                    st.dataframe(df_cols, hide_index=True, use_container_width=True)
+
+        # ── 등록 매핑 목록 ────────────────────────────────
+        with st.expander(f"등록된 매핑 목록 ({len(mappings)}건)", expanded=False):
+            import pandas as pd
+            rows = []
+            for m in mappings:
+                src = m.get("source_meta", {})
+                tgt = m.get("target_meta", {})
+                rows.append({
+                    "매핑 ID":   m.get("mapping_id", ""),
+                    "소스 테이블": src.get("table_name", ""),
+                    "타겟 테이블": tgt.get("table_name", ""),
+                    "로드 유형":  m.get("load_type", "MERGE"),
+                })
+            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
     st.stop()
 

@@ -1,17 +1,21 @@
-# Oracle / MariaDB SQL 생성 챗봇
+# AETL Agent
 
-자연어(한국어)를 Oracle 또는 MariaDB SQL로 변환하는 AI 챗봇입니다.
+Oracle 또는 MariaDB, PostgresSQL등으로 변환하는 SUB ETL Tool입니다.
 
-Google Gemini LLM과 LangGraph를 활용하여 사용자의 질문을 분석하고, 안전한 SQL 쿼리를 생성합니다.
+상용 LLM과 LangGraph를 활용하여 ETL 작업을 자동화합니다.
 
 ---
 
 ## 주요 기능
 
 - **자연어 → SQL 변환**: 한국어 질문을 Oracle SQL 쿼리로 자동 변환
+- **ETL 작업 자동화**: 사용자의 요구사항을 분석하여 ETL 작업을 자동화합니다.
 - **다중 턴 대화**: 기간, 날짜 등의 정보를 대화 중에 수집하여 컨텍스트 유지
 - **보안 정책 적용**: DML/DDL 차단, PII 보호, 행 수 제한 등
 - **자동 검증 및 복구**: 생성된 SQL을 검증하고, 문제가 있으면 자동으로 수정 시도
+- **스키마 캐싱**: DB 스키마를 캐싱하여 빠른 응답 속도
+- **스키마 동적 로딩**: DB 연결 설정 파일에 따라 동적으로 스키마 로딩
+- **Lineage 추적**: 테이블 간의 관계를 추적하여 데이터의 흐름을 파악
 
 ---
 
@@ -19,25 +23,34 @@ Google Gemini LLM과 LangGraph를 활용하여 사용자의 질문을 분석하�
 
 | 구분 | 기술 |
 |------|------|
-| LLM | Google Gemini 2.5 Flash |
+| LLM | Google Gemini 2.5 Flash, Claude 3.5 Sonnet |
 | 프레임워크 | LangChain + LangGraph |
-| UI | Streamlit |
+| UI | Streamlit, React |
 | 언어 | Python 3.10+ |
-| 대상 DB | Oracle / MariaDB (동적 스키마 로딩 지원) |
+| 대상 DB | Oracle / MariaDB / PostgreSQL (동적 스키마 로딩 지원) |
 
 ---
 
 ## 프로젝트 구조
 
 ```
-chatbot_sql/
-├── app.py              # 핵심 로직 (LangGraph 파이프라인)
-├── streamlit_app.py    # 웹 UI (Streamlit)
-├── db_schema.py        # DB 스키마 조회 모듈 (Oracle/MariaDB)
-├── db_config.json      # DB 연결 설정 파일
-├── .env                # 환경변수 (API 키, DB 비밀번호)
-├── .schema_cache.json  # 스키마 캐시 (자동 생성)
-└── README.md           # 프로젝트 설명 (현재 파일)
+AETL_program_dev/
+├── app.py                  # 메인 서버 로직 (FastAPI/LangGraph)
+├── streamlit_app.py        # 기본 웹 UI (Streamlit)
+├── aetl_agent.py           # 핵심 에이전트 로직 (LangGraph 파이프라인)
+├── aetl_designer.py        # DW/스키마 디자인 로직
+├── aetl_executor.py        # SQL 실행 및 검증 로직
+├── aetl_export.py          # 엑셀 산출물 자동화 로직
+├── aetl_lineage.py         # 데이터 흐름(Lineage) 시각화 로직
+├── aetl_profiler.py        # 데이터 프로파일링 및 통계 수집
+├── aetl_store.py           # 실행 이력 및 상태 관리
+├── aetl_template_profile.py # 템플릿 기반 프로파일링 관리
+├── db_schema.py            # DB 스키마 조회 (Oracle/MariaDB/PostgreSQL)
+├── db_config.json          # 데이터베이스 연결 설정
+├── .env                    # 환경변수 (API 키, DB 접속 정보)
+├── .schema_cache.json      # 스키마 캐시 파일 (자동 생성)
+├── CLAUDE.md               # 프로젝트 가이드 (현재 파일)
+└── documents/              # 아키텍처 및 상세 설계 문서
 ```
 
 ---
@@ -73,7 +86,10 @@ GOOGLE_API_KEY=your_google_api_key_here
 DB_PASSWORD=your_db_password_here
 ```
 
-> **참고**: Google API 키는 [Google AI Studio](https://aistudio.google.com/)에서 발급받을 수 있습니다.
+> **참고**: 
+Google API 키는 [Google AI Studio](https://aistudio.google.com/)에서 발급받을 수 있습니다.
+
+Claude API 키는 [Claude](https://claude.com/)에서 발급받을 수 있습니다.
 
 ---
 
@@ -301,43 +317,41 @@ python app.py
 
 ## 파일별 역할
 
-### app.py (메인 프로세스)
+### app.py / aetl_agent.py (에이전트 시스템)
+- LangGraph 기반의 ETL 워크플로우 상태 머신 구현
+- 자연어 의도 파악, 계획 수립, SQL 생성 및 검증 파이프라인
 
-- LangGraph 기반 상태 머신 구현
-- 6개 노드로 구성된 SQL 생성 파이프라인
-- 보안 정책 검증 로직 (Oracle/MariaDB 구문 지원)
-- 동적 스키마 로딩 (`load_schema()`, `refresh_schema()`)
-- 외부 호출용 `run()` 함수 제공
+### aetl_executor.py / aetl_store.py (실행 및 이력 관리)
+- 생성된 SQL의 실제 DB 실행 (SELECT/DML)
+- 실행 이력 저장 및 검증 결과(Pass/Fail) 관리
 
-### db_schema.py (DB 스키마 조회)
+### aetl_export.py / aetl_designer.py (산출물 및 설계)
+- 매핑정의서 및 검증 리포트 엑셀 자동 생성
+- API 문서(Swagger 등) 기반 Star Schema 설계 및 ERD 시각화 데이터 생성
 
-- Oracle/MariaDB 메타데이터 조회
-- 테이블, 컬럼, PK, FK 정보 자동 수집
-- 외래키 기반 조인 규칙 자동 생성
-- 스키마 캐싱 지원 (TTL 설정 가능)
+### aetl_lineage.py / aetl_profiler.py (분석 및 흐름)
+- 테이블/컬럼 간 데이터 흐름(Lineage) 추적 및 시각화
+- 데이터 프로파일링(통계, 분포) 수행 및 결과 제공
 
-### db_config.json (DB 연결 설정)
+### db_schema.py / db_config.json (데이터베이스 레이어)
+- Oracle/MariaDB/PostgreSQL 메타데이터 조회 및 캐싱
+- 데이터베이스 연결 설정 및 보안 정책 관리
 
-- DB 연결 정보 (호스트, 포트, 계정 등)
-- 스키마 조회 옵션 (테이블 필터링)
-- 환경변수 참조 지원 (`${VAR_NAME}`)
-
-### streamlit_app.py (웹 UI)
-
-- Streamlit 기반 채팅 인터페이스
-- 세션 상태 관리 (대화 기록, 메모리)
-- SQL 결과 시각화 (코드 하이라이팅, JSON 출력)
+### etl_streamlit_app.py / streamlit_app.py (UI 레이어)
+- 에이전트 채팅 인터페이스 및 결과 시각화
+- 리니지 그래프 및 검증 리포트 대시보드 제공
 
 ---
 
 ## 향후 개발 계획
 
 - [x] ~~동적 스키마 로딩 (DB 메타데이터 조회)~~ ✅ 완료
-- [x] ~~Oracle / MariaDB 지원~~ ✅ 완료
-- [ ] 실제 DB 연결 후 쿼리 실행 기능
+- [x] ~~Oracle / MariaDB / PostgreSQL 지원~~ ✅ 완료
+- [x] ~~실제 DB 연결 후 쿼리 실행 및 검증 기능~~ ✅ 완료
+- [x] ~~매핑정의서 및 산출물 자동 생성 (Excel)~~ ✅ 완료
+- [/] 데이터 흐름(Lineage) 시각화 엔진 고도화
 - [ ] 더 정교한 자연어 날짜 파싱 (예: "지난 달", "올해")
-- [ ] 쿼리 결과 시각화 (차트, 테이블)
-- [ ] 사용자 권한 기반 접근 제어
+- [ ] 사용자 권한 기반 접근 제어 및 실행 감사 로깅
 
 ---
 
@@ -347,7 +361,7 @@ streamlit run etl_streamlit_app.py
 ---
 
 ## 문의
-안주현
+WI사업부 안주현
 
 
 ## API KEY는 사용하는 LLM 제품의 KEY를 .env에 설정하여 활용하세요.
