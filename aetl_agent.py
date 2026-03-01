@@ -173,8 +173,8 @@ def generate_validation_queries_tool(
 
         schema = get_schema("db_config.json", force_refresh=False)
 
-        src_meta = schema_to_metadata(schema, source_table)
-        tgt_meta = schema_to_metadata(schema, target_table)
+        src_meta = schema_to_metadata(schema.get("tables", {}), source_table)
+        tgt_meta = schema_to_metadata(schema.get("tables", {}), target_table)
 
         queries = generate_validation_queries_no_llm(
             source_meta=src_meta,
@@ -264,8 +264,13 @@ def compare_row_counts(source_table: str, target_table: str) -> str:
         db_type = config.get("db_type", "oracle").lower()
         conn_cfg = config["connection"]
 
-        def get_count(cursor, tbl: str, is_oracle: bool) -> int:
-            q = f'SELECT COUNT(*) FROM "{tbl}"' if is_oracle else f"SELECT COUNT(*) FROM `{tbl}`"
+        def get_count(cursor, tbl: str, db_type: str) -> int:
+            if db_type == "oracle":
+                q = f'SELECT COUNT(*) FROM "{tbl}"'
+            elif db_type in ("postgresql", "postgres"):
+                q = f'SELECT COUNT(*) FROM "{tbl}"'
+            else:
+                q = f"SELECT COUNT(*) FROM `{tbl}`"
             cursor.execute(q)
             return cursor.fetchone()[0]
 
@@ -274,8 +279,19 @@ def compare_row_counts(source_table: str, target_table: str) -> str:
             dsn = f"{conn_cfg['host']}:{conn_cfg['port']}/{conn_cfg['database']}"
             conn = oracledb.connect(user=conn_cfg["user"], password=conn_cfg["password"], dsn=dsn)
             cur = conn.cursor()
-            src_cnt = get_count(cur, source_table, True)
-            tgt_cnt = get_count(cur, target_table, True)
+            src_cnt = get_count(cur, source_table, db_type)
+            tgt_cnt = get_count(cur, target_table, db_type)
+            conn.close()
+        elif db_type in ("postgresql", "postgres"):
+            import psycopg2
+            conn = psycopg2.connect(
+                host=conn_cfg["host"], port=int(conn_cfg.get("port", 5432)),
+                user=conn_cfg["user"], password=conn_cfg["password"],
+                dbname=conn_cfg["database"],
+            )
+            cur = conn.cursor()
+            src_cnt = get_count(cur, source_table, db_type)
+            tgt_cnt = get_count(cur, target_table, db_type)
             conn.close()
         else:
             import mariadb
@@ -285,8 +301,8 @@ def compare_row_counts(source_table: str, target_table: str) -> str:
                 database=conn_cfg["database"],
             )
             cur = conn.cursor()
-            src_cnt = get_count(cur, source_table, False)
-            tgt_cnt = get_count(cur, target_table, False)
+            src_cnt = get_count(cur, source_table, db_type)
+            tgt_cnt = get_count(cur, target_table, db_type)
             conn.close()
 
         diff = src_cnt - tgt_cnt
@@ -329,6 +345,46 @@ def sync_metadata_tool(tables: str = "") -> str:
         return f"메타데이터 동기화 오류: {e}"
 
 
+@tool
+def get_tables_by_role(role: str = "all") -> str:
+    """
+    역할별 테이블 목록을 조회합니다.
+    role: "source" (소스 테이블), "target" (타겟 테이블), "all" (전체 + 역할 표시)
+    사용 예: get_tables_by_role("source"), get_tables_by_role("target"), get_tables_by_role("all")
+    """
+    try:
+        from aetl_metadata_engine import get_tables_with_roles, get_role_summary
+        tables = get_tables_with_roles()
+        if not tables:
+            return "메타데이터가 없습니다. sync_metadata_tool을 먼저 실행하세요."
+
+        summary = get_role_summary()
+        header = (
+            f"역할 통계: 소스 {summary['source']}개, 타겟 {summary['target']}개, "
+            f"미분류 {summary['unknown']}개 (확정 {summary['confirmed']}개)\n\n"
+        )
+
+        if role in ("source", "target"):
+            filtered = [t for t in tables if t["effective_role"] == role]
+            label = "소스" if role == "source" else "타겟"
+            if not filtered:
+                return f"{label} 역할 테이블이 없습니다."
+            lines = [f"{header}{label} 테이블 ({len(filtered)}개):"]
+            for t in filtered:
+                status = "확정" if t["confirmed_role"] else "추천"
+                lines.append(f"  - {t['table_name']} ({status})")
+            return "\n".join(lines)
+        else:
+            lines = [f"{header}전체 테이블 ({len(tables)}개):"]
+            for t in tables:
+                eff = t["effective_role"]
+                status = "확정" if t["confirmed_role"] else "추천"
+                lines.append(f"  - {t['table_name']} [{eff}] ({status})")
+            return "\n".join(lines)
+    except Exception as e:
+        return f"역할별 테이블 조회 오류: {e}"
+
+
 # ─────────────────────────────────────────────────────────────
 # LLM 초기화
 # ─────────────────────────────────────────────────────────────
@@ -340,6 +396,7 @@ _TOOLS = [
     suggest_rules_tool,
     compare_row_counts,
     sync_metadata_tool,
+    get_tables_by_role,
 ]
 
 _TOOL_MAP = {t.name: t for t in _TOOLS}
@@ -355,39 +412,23 @@ ETL 검증 쿼리 생성, 데이터 품질 규칙 제안 등의 작업을 수행
 - suggest_rules_tool: 프로파일 기반 검증 규칙 자동 제안 (메타데이터 우선)
 - compare_row_counts: 소스·타겟 건수 직접 비교 (항상 라이브 DB)
 - sync_metadata_tool: 스키마·프로파일 메타데이터를 SQLite에 사전 수집
+- get_tables_by_role: 역할(소스/타겟)별 테이블 목록 조회 (메타데이터 기반)
 
 ## 행동 규칙
 1. 테이블명이 명확하지 않으면 search_tables로 먼저 확인하세요.
 2. 검증 쿼리 생성 전 반드시 테이블 스키마를 확인하세요.
 3. 규칙 제안 시 profile_table_tool을 먼저 호출하여 데이터 특성을 파악하세요.
 4. profile_table_tool이 "메타데이터 없음" 오류를 반환하면, sync_metadata_tool을 먼저 호출하거나 사용자에게 동기화를 안내하세요.
-5. 응답은 한국어로, 결과를 표나 코드블록으로 명확하게 정리하세요.
-6. DML(INSERT/UPDATE/DELETE/DROP)은 절대 실행하지 마세요.
+5. 소스/타겟 테이블을 구분해야 할 때 get_tables_by_role을 활용하세요.
+6. 응답은 한국어로, 결과를 표나 코드블록으로 명확하게 정리하세요.
+7. DML(INSERT/UPDATE/DELETE/DROP)은 절대 실행하지 마세요.
 """
 
 
 def _get_llm_with_tools():
-    """Tool binding된 LLM 반환"""
-    google_api_key = os.getenv("GOOGLE_API_KEY")
-    if google_api_key:
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            llm = ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash",
-                google_api_key=google_api_key,
-                temperature=0.0,
-            )
-            return llm.bind_tools(_TOOLS)
-        except Exception:
-            pass
-
-    anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
-    if anthropic_api_key:
-        from langchain_anthropic import ChatAnthropic
-        llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0.0, api_key=anthropic_api_key)
-        return llm.bind_tools(_TOOLS)
-
-    raise RuntimeError("API 키를 찾을 수 없습니다. .env 파일에 GOOGLE_API_KEY 또는 ANTHROPIC_API_KEY를 설정하세요.")
+    """Tool binding된 LLM 반환 (LLM_PROVIDER 환경변수로 프로바이더 선택 가능)"""
+    from aetl_llm import get_llm
+    return get_llm(with_tools=_TOOLS)
 
 
 # ─────────────────────────────────────────────────────────────

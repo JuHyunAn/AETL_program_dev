@@ -28,7 +28,7 @@ build/
 *.log
 
 # Workspace specific
-.claude/
+# .claude/
 .gemini/
 .agents/
 .agent/

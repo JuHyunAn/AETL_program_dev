@@ -104,6 +104,17 @@ class SchemaFetcher(ABC):
         """특정 테이블의 컬럼 목록을 조회합니다."""
         pass
 
+    def get_column_details(self, table_name: str) -> List[Dict[str, Any]]:
+        """
+        컬럼 상세 정보(이름, 데이터타입, nullable)를 조회합니다.
+        기본 구현은 get_columns()로 fallback (이름만 반환).
+        각 DB 구현체에서 override하여 상세 정보를 반환합니다.
+
+        Returns:
+            [{"name": str, "type": str, "nullable": bool}, ...]
+        """
+        return [{"name": c, "type": "", "nullable": True} for c in self.get_columns(table_name)]
+
     @abstractmethod
     def get_primary_keys(self, table_name: str) -> List[str]:
         """특정 테이블의 기본키 컬럼을 조회합니다."""
@@ -171,7 +182,7 @@ class SchemaFetcher(ABC):
             # 2. 각 테이블의 상세 정보 조회
             tables = {}
             for table_name in table_names:
-                columns = self.get_columns(table_name)
+                columns = self.get_column_details(table_name)
                 pk = self.get_primary_keys(table_name)
                 fk = self.get_foreign_keys(table_name)
 
@@ -277,6 +288,28 @@ class OracleSchemaFetcher(SchemaFetcher):
             self.cursor.execute(sql, {"table_name": table_name})
 
         return [row[0] for row in self.cursor.fetchall()]
+
+    def get_column_details(self, table_name: str) -> List[Dict[str, Any]]:
+        if self.owner:
+            sql = """
+                SELECT column_name, data_type, nullable
+                FROM all_tab_columns
+                WHERE owner = :owner AND table_name = :table_name
+                ORDER BY column_id
+            """
+            self.cursor.execute(sql, {"owner": self.owner.upper(), "table_name": table_name})
+        else:
+            sql = """
+                SELECT column_name, data_type, nullable
+                FROM user_tab_columns
+                WHERE table_name = :table_name
+                ORDER BY column_id
+            """
+            self.cursor.execute(sql, {"table_name": table_name})
+        return [
+            {"name": row[0], "type": row[1], "nullable": row[2] == "Y"}
+            for row in self.cursor.fetchall()
+        ]
 
     def get_primary_keys(self, table_name: str) -> List[str]:
         if self.owner:
@@ -415,6 +448,19 @@ class MariaDBSchemaFetcher(SchemaFetcher):
         self.cursor.execute(sql, (self.database, table_name))
         return [row[0] for row in self.cursor.fetchall()]
 
+    def get_column_details(self, table_name: str) -> List[Dict[str, Any]]:
+        sql = """
+            SELECT column_name, column_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = %s AND table_name = %s
+            ORDER BY ordinal_position
+        """
+        self.cursor.execute(sql, (self.database, table_name))
+        return [
+            {"name": row[0], "type": row[1], "nullable": row[2] == "YES"}
+            for row in self.cursor.fetchall()
+        ]
+
     def get_primary_keys(self, table_name: str) -> List[str]:
         sql = """
             SELECT kcu.column_name
@@ -475,13 +521,27 @@ class PostgreSQLSchemaFetcher(SchemaFetcher):
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
-        # schema_filter: 명시 지정 스키마 목록 (None = connect 후 자동 감지)
+        # 스키마 필터 파싱: LIKE 패턴 vs exact match 분류
+        # - 단일 값 (콤마 없음): 자동으로 "값%" LIKE 패턴 적용
+        #   예) "public" → LIKE 'public%' → public, public_staging 등 매칭
+        # - 콤마 구분 다중 값: 각각 exact match
+        #   예) "public,marts" → 정확히 public과 marts만
+        # - % 또는 * 포함: 명시적 LIKE 패턴
+        #   예) "public%", "*staging*"
+        self._exact_schemas: List[str] = []
+        self._like_patterns: List[str] = []
         if self.owner:
-            self.schema_filter: Optional[List[str]] = [
-                s.strip() for s in self.owner.split(",") if s.strip()
-            ]
-        else:
-            self.schema_filter = None
+            raw_parts = [s.strip() for s in self.owner.split(",") if s.strip()]
+            for part in raw_parts:
+                if "%" in part or "*" in part:
+                    # 명시적 와일드카드 → LIKE 패턴 (* → % 변환)
+                    self._like_patterns.append(part.replace("*", "%"))
+                elif len(raw_parts) == 1:
+                    # 단일 값 → 자동 LIKE prefix 적용
+                    self._like_patterns.append(part + "%")
+                else:
+                    # 콤마 구분 다중 값 → exact match
+                    self._exact_schemas.append(part)
         self._active_schemas: List[str] = []   # connect() 후 결정
         self._use_prefix: bool = True           # 테이블 키에 "schema." 접두어 여부
 
@@ -501,11 +561,22 @@ class PostgreSQLSchemaFetcher(SchemaFetcher):
         )
         self.cursor = self.conn.cursor()
 
-        _sf = self.schema_filter          # 로컬 변수로 받으면 Pyright가 None 제외로 narrow
-        if _sf:
-            # 명시 지정 스키마 사용
-            self._active_schemas = list(_sf)
-            # 단일 명시 지정이면 prefix 불필요
+        # ── LIKE 패턴 / exact match / 자동 감지로 _active_schemas 결정 ──
+        if self._like_patterns or self._exact_schemas:
+            resolved: set[str] = set(self._exact_schemas)
+            # LIKE 패턴으로 실제 스키마명 resolve
+            for pat in self._like_patterns:
+                self.cursor.execute(
+                    "SELECT schema_name FROM information_schema.schemata "
+                    "WHERE schema_name LIKE %s ORDER BY schema_name",
+                    (pat,),
+                )
+                resolved.update(
+                    row[0] for row in self.cursor.fetchall()
+                    if row[0] not in self._SYSTEM_SCHEMAS
+                    and not row[0].startswith("pg_")
+                )
+            self._active_schemas = sorted(resolved)
             self._use_prefix = len(self._active_schemas) > 1
         else:
             # 시스템 스키마를 제외한 모든 사용자 스키마 자동 감지
@@ -516,7 +587,7 @@ class PostgreSQLSchemaFetcher(SchemaFetcher):
                     'pg_catalog', 'information_schema',
                     'pg_toast', 'pg_temp_1', 'pg_toast_temp_1'
                 )
-                  AND schema_name NOT LIKE 'pg_%'
+                  AND schema_name NOT LIKE 'pg_%%'
                 ORDER BY schema_name
             """)
             self._active_schemas = [row[0] for row in self.cursor.fetchall()]
@@ -566,6 +637,27 @@ class PostgreSQLSchemaFetcher(SchemaFetcher):
             ORDER BY ordinal_position
         """, (schema, tbl))
         return [row[0] for row in self.cursor.fetchall()]
+
+    def get_column_details(self, table_name: str) -> List[Dict[str, Any]]:
+        schema, tbl = self._split_table_key(table_name)
+        self.cursor.execute("""
+            SELECT
+                a.attname            AS column_name,
+                pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
+                NOT a.attnotnull     AS nullable
+            FROM pg_attribute a
+            JOIN pg_class c ON a.attrelid = c.oid
+            JOIN pg_namespace n ON c.relnamespace = n.oid
+            WHERE n.nspname = %s
+              AND c.relname = %s
+              AND a.attnum > 0
+              AND NOT a.attisdropped
+            ORDER BY a.attnum
+        """, (schema, tbl))
+        return [
+            {"name": row[0], "type": row[1], "nullable": bool(row[2])}
+            for row in self.cursor.fetchall()
+        ]
 
     def get_primary_keys(self, table_name: str) -> List[str]:
         schema, tbl = self._split_table_key(table_name)
@@ -651,14 +743,30 @@ def get_cache_path(config_path: str) -> str:
     return os.path.join(config_dir, CACHE_FILE)
 
 
-def load_cached_schema(cache_file: str, ttl: int = 3600) -> Optional[Dict[str, Any]]:
+def _make_options_fingerprint(config: Dict[str, Any]) -> str:
+    """schema_options + db_type 를 정렬 직렬화하여 핑거프린트 생성"""
+    import hashlib
+    opts = {
+        "db_type": config.get("db_type", ""),
+        "schema_options": config.get("schema_options", {}),
+    }
+    raw = json.dumps(opts, sort_keys=True, ensure_ascii=False)
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
+def load_cached_schema(
+    cache_file: str,
+    ttl: int = 3600,
+    config: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
     """
     캐시 파일에서 스키마를 로드합니다.
-    TTL이 지났으면 None을 반환합니다.
+    TTL이 지났거나 schema_options가 변경되었으면 None을 반환합니다.
 
     Parameters:
         cache_file: 캐시 파일 경로
         ttl: 캐시 유효 시간 (초)
+        config: 현재 설정 딕셔너리 (schema_options 변경 감지용)
 
     Returns:
         스키마 딕셔너리 또는 None
@@ -670,9 +778,18 @@ def load_cached_schema(cache_file: str, ttl: int = 3600) -> Optional[Dict[str, A
         with open(cache_file, "r", encoding="utf-8") as f:
             cached = json.load(f)
 
+        # TTL 만료 검사
         cached_time = cached.get("_cached_at", 0)
         if time.time() - cached_time > ttl:
             return None
+
+        # schema_options 변경 검사
+        if config is not None:
+            current_fp = _make_options_fingerprint(config)
+            cached_fp = cached.get("_options_fingerprint", "")
+            if current_fp != cached_fp:
+                print("[INFO] schema_options가 변경되어 캐시를 무시합니다.")
+                return None
 
         # 메타데이터 제거 후 반환
         schema = {k: v for k, v in cached.items() if not k.startswith("_")}
@@ -682,17 +799,24 @@ def load_cached_schema(cache_file: str, ttl: int = 3600) -> Optional[Dict[str, A
         return None
 
 
-def save_schema_to_cache(schema: Dict[str, Any], cache_file: str):
+def save_schema_to_cache(
+    schema: Dict[str, Any],
+    cache_file: str,
+    config: Optional[Dict[str, Any]] = None,
+):
     """
     스키마를 캐시 파일에 저장합니다.
 
     Parameters:
         schema: 저장할 스키마 딕셔너리
         cache_file: 캐시 파일 경로
+        config: 현재 설정 딕셔너리 (핑거프린트 저장용)
     """
     cached = schema.copy()
     cached["_cached_at"] = time.time()
     cached["_db_type"] = schema.get("_db_type", "unknown")
+    if config is not None:
+        cached["_options_fingerprint"] = _make_options_fingerprint(config)
 
     with open(cache_file, "w", encoding="utf-8") as f:
         json.dump(cached, f, ensure_ascii=False, indent=2)
@@ -727,9 +851,9 @@ def get_schema(
     cache_ttl = config.get("cache", {}).get("ttl_seconds", 3600)
     cache_file = get_cache_path(config_path)
 
-    # 캐시 확인
+    # 캐시 확인 (schema_options 변경 시 자동 무효화)
     if cache_enabled and not force_refresh:
-        cached = load_cached_schema(cache_file, cache_ttl)
+        cached = load_cached_schema(cache_file, cache_ttl, config=config)
         if cached:
             print(f"[INFO] 캐시에서 스키마 로드됨 ({cache_file})")
             return cached
@@ -744,9 +868,9 @@ def get_schema(
     # DB 타입 정보 추가
     schema["_db_type"] = db_type.lower()
 
-    # 캐시 저장
+    # 캐시 저장 (schema_options 핑거프린트 포함)
     if cache_enabled:
-        save_schema_to_cache(schema, cache_file)
+        save_schema_to_cache(schema, cache_file, config=config)
         print(f"[INFO] 스키마 캐시 저장됨 ({cache_file})")
 
     return schema

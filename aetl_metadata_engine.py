@@ -7,14 +7,18 @@ DB 스키마·프로파일을 SQLite에 사전 수집하여 Agent가 라이브 D
 저장소: .aetl_metadata.db (SQLite)
 
 스키마:
-  meta_tables  — 테이블 목록 + 행 수
+  meta_tables  — 테이블 목록 + 행 수 + 역할(suggested_role/confirmed_role)
   meta_columns — 컬럼 메타데이터 (타입, PK, FK)
   meta_profiles — 컬럼별 통계 (null 비율, distinct 수, min/max, top 값)
 
 Public API:
-  sync_schema()             — db_schema → SQLite 동기화
+  sync_schema()             — db_schema → SQLite 동기화 (역할 자동 분류 포함)
   sync_profile()            — aetl_profiler → SQLite 동기화 (느림)
-  get_all_tables()          — 테이블 목록 조회
+  get_all_tables()          — 테이블 목록 조회 (역할 포함)
+  get_tables_with_roles()   — 역할 정보가 포함된 테이블 목록 (effective_role 계산)
+  confirm_table_role()      — 사용자 역할 확정
+  clear_table_role()        — 확정 역할 초기화
+  get_role_summary()        — 역할별 통계
   get_table_schema_from_meta(table_name) — 스키마 조회
   search_tables_from_meta(keyword)       — 키워드 검색
   get_profile_from_meta(table_name)      — 프로파일 조회
@@ -27,12 +31,25 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Any
 
 _DB_FILE = ".aetl_metadata.db"
 _PROFILE_TTL_HOURS = 24  # 프로파일은 24시간 이내면 재수집 생략
+
+# ─────────────────────────────────────────────────────────────
+# 테이블 역할 분류 패턴
+# ─────────────────────────────────────────────────────────────
+_SOURCE_PATTERNS = re.compile(
+    r"^(ods_|stg_|dw_|raw_|src_|ext_|load_)", re.IGNORECASE
+)
+_TARGET_PATTERNS = re.compile(
+    r"^(dm_|fact_|dim_|f_|d_|rpt_|agg_|mart_)", re.IGNORECASE
+)
+_SOURCE_SCHEMA_HINTS = {"ods", "stg", "staging", "raw", "source", "dw"}
+_TARGET_SCHEMA_HINTS = {"dm", "mart", "marts", "analytics", "report", "bi"}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -55,11 +72,14 @@ def _init_db(conn: sqlite3.Connection) -> None:
     """테이블이 없으면 생성."""
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS meta_tables (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            table_name TEXT    UNIQUE NOT NULL,
-            db_type    TEXT,
-            row_count  INTEGER DEFAULT 0,
-            synced_at  TEXT
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            table_name      TEXT    UNIQUE NOT NULL,
+            db_type         TEXT,
+            row_count       INTEGER DEFAULT 0,
+            suggested_role  TEXT,
+            confirmed_role  TEXT,
+            role_updated_at TEXT,
+            synced_at       TEXT
         );
 
         CREATE TABLE IF NOT EXISTS meta_columns (
@@ -87,7 +107,46 @@ def _init_db(conn: sqlite3.Connection) -> None:
             UNIQUE(table_name, col_name)
         );
     """)
+    # 기존 DB 마이그레이션: 역할 컬럼이 없으면 추가
+    for col in ("suggested_role", "confirmed_role", "role_updated_at"):
+        try:
+            conn.execute(f"ALTER TABLE meta_tables ADD COLUMN {col} TEXT")
+        except sqlite3.OperationalError:
+            pass  # 이미 존재
     conn.commit()
+
+
+def classify_table_role(table_name: str) -> str:
+    """
+    테이블명(schema.table 형식 허용)에서 역할을 추론합니다.
+
+    Returns: "source" / "target" / "unknown"
+    """
+    # schema.table → 분리
+    if "." in table_name:
+        schema_part, tbl_part = table_name.rsplit(".", 1)
+    else:
+        schema_part, tbl_part = "", table_name
+
+    tbl_lower = tbl_part.lower()
+    schema_lower = schema_part.lower()
+
+    # 1) 테이블명 패턴 매칭 (가장 강력한 신호)
+    if _SOURCE_PATTERNS.match(tbl_lower):
+        return "source"
+    if _TARGET_PATTERNS.match(tbl_lower):
+        return "target"
+
+    # 2) 스키마명 힌트 (약한 신호)
+    if schema_lower:
+        for hint in _SOURCE_SCHEMA_HINTS:
+            if hint in schema_lower:
+                return "source"
+        for hint in _TARGET_SCHEMA_HINTS:
+            if hint in schema_lower:
+                return "target"
+
+    return "unknown"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -139,14 +198,16 @@ def sync_schema(
                     ref = f"{fk.get('ref_table','')}.{fk.get('ref_col','')}"
                     fk_map[fk.get("col", "").upper()] = ref
 
-                # meta_tables upsert
+                # meta_tables upsert (suggested_role 자동 분류, confirmed_role 보존)
+                role = classify_table_role(tbl_name)
                 conn.execute("""
-                    INSERT INTO meta_tables (table_name, db_type, row_count, synced_at)
-                    VALUES (?, ?, 0, ?)
+                    INSERT INTO meta_tables (table_name, db_type, row_count, suggested_role, synced_at)
+                    VALUES (?, ?, 0, ?, ?)
                     ON CONFLICT(table_name) DO UPDATE SET
-                        db_type   = excluded.db_type,
-                        synced_at = excluded.synced_at
-                """, (tbl_name, db_type, now_iso))
+                        db_type        = excluded.db_type,
+                        suggested_role = excluded.suggested_role,
+                        synced_at      = excluded.synced_at
+                """, (tbl_name, db_type, role, now_iso))
 
                 # meta_columns upsert
                 columns = info.get("columns", [])
@@ -305,18 +366,114 @@ def get_all_tables() -> list[dict]:
     SQLite에서 테이블 목록을 반환합니다.
 
     Returns:
-        [{"table_name": str, "db_type": str, "row_count": int, "synced_at": str}, ...]
+        [{"table_name": str, "db_type": str, "row_count": int,
+          "suggested_role": str|None, "confirmed_role": str|None, "synced_at": str}, ...]
     """
     try:
         conn = _get_conn()
         _init_db(conn)
         rows = conn.execute(
-            "SELECT table_name, db_type, row_count, synced_at FROM meta_tables ORDER BY table_name"
+            "SELECT table_name, db_type, row_count, suggested_role, confirmed_role, synced_at "
+            "FROM meta_tables ORDER BY table_name"
         ).fetchall()
         conn.close()
         return [dict(r) for r in rows]
     except Exception:
         return []
+
+
+def get_tables_with_roles() -> list[dict]:
+    """
+    역할 정보가 포함된 테이블 목록을 반환합니다.
+    confirmed_role이 있으면 그것을 effective_role로, 없으면 suggested_role을 사용합니다.
+
+    Returns:
+        [{"table_name": str, "suggested_role": str, "confirmed_role": str|None,
+          "effective_role": str}, ...]
+    """
+    try:
+        conn = _get_conn()
+        _init_db(conn)
+        rows = conn.execute(
+            "SELECT table_name, suggested_role, confirmed_role FROM meta_tables ORDER BY table_name"
+        ).fetchall()
+        conn.close()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["effective_role"] = d["confirmed_role"] or d["suggested_role"] or "unknown"
+            result.append(d)
+        return result
+    except Exception:
+        return []
+
+
+def confirm_table_role(table_name: str, role: str) -> bool:
+    """
+    사용자가 테이블 역할을 확정합니다.
+
+    Args:
+        table_name: 테이블명
+        role: "source" / "target" / "unknown"
+    """
+    try:
+        conn = _get_conn()
+        _init_db(conn)
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        conn.execute(
+            "UPDATE meta_tables SET confirmed_role = ?, role_updated_at = ? "
+            "WHERE UPPER(table_name) = ?",
+            (role, now_iso, table_name.upper()),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+def clear_table_role(table_name: str) -> bool:
+    """사용자 확정 역할을 초기화합니다 (재제안 시 사용)."""
+    try:
+        conn = _get_conn()
+        _init_db(conn)
+        conn.execute(
+            "UPDATE meta_tables SET confirmed_role = NULL, role_updated_at = NULL "
+            "WHERE UPPER(table_name) = ?",
+            (table_name.upper(),),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+def get_role_summary() -> dict:
+    """
+    역할별 테이블 수 통계를 반환합니다.
+
+    Returns:
+        {"source": int, "target": int, "unknown": int, "confirmed": int}
+    """
+    try:
+        conn = _get_conn()
+        _init_db(conn)
+        rows = conn.execute(
+            "SELECT COALESCE(confirmed_role, suggested_role, 'unknown') AS role, COUNT(*) AS cnt "
+            "FROM meta_tables GROUP BY role"
+        ).fetchall()
+        confirmed_cnt = conn.execute(
+            "SELECT COUNT(*) FROM meta_tables WHERE confirmed_role IS NOT NULL"
+        ).fetchone()[0]
+        conn.close()
+        summary = {"source": 0, "target": 0, "unknown": 0, "confirmed": confirmed_cnt}
+        for r in rows:
+            role_key = r["role"] if r["role"] in ("source", "target") else "unknown"
+            summary[role_key] = r["cnt"]
+        return summary
+    except Exception:
+        return {"source": 0, "target": 0, "unknown": 0, "confirmed": 0}
 
 
 def get_table_schema_from_meta(table_name: str) -> dict | None:

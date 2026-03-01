@@ -85,19 +85,26 @@ def parse_swagger(content: str | bytes) -> dict:
     return {"entities": entities, "source": "swagger"}
 
 
-def parse_table_definition_text(text: str) -> dict:
+def parse_table_definition_text(text: str, max_chars: int = 12000) -> dict:
     """
     자유 형식 텍스트(PDF 추출 등)에서 테이블 정의를 AI로 추출합니다.
     ⚠ 초안만 제공 — 반드시 사용자 검토 필요
 
+    Args:
+        text: 입력 텍스트 (PDF 추출 텍스트 포함)
+        max_chars: LLM에 전달할 최대 문자 수 (기본 12000)
+
     Returns:
         {"entities": [...], "source": "text_ai", "warning": str}
     """
+    truncated = text[:max_chars]
+    overflow = len(text) > max_chars
     prompt = f"""다음 텍스트에서 데이터베이스 테이블 정의를 추출하세요.
+테이블명, 컬럼명, 데이터타입, PK 여부, NULL 허용, 설명 등을 최대한 정확하게 추출하세요.
 JSON만 응답하세요.
 
 텍스트:
-{text[:3000]}
+{truncated}
 
 응답 형식:
 {{
@@ -119,11 +126,59 @@ JSON만 응답하세요.
     try:
         data = json.loads(m.group())
         data["source"] = "text_ai"
-        data["warning"] = "⚠ AI 초안입니다. 반드시 내용을 검토하고 수정하세요."
+        warn = "⚠ AI 초안입니다. 반드시 내용을 검토하고 수정하세요."
+        if overflow:
+            warn += f"\n⚠ 텍스트가 {max_chars:,}자를 초과하여 일부만 분석되었습니다 (전체 {len(text):,}자)."
+        data["warning"] = warn
         return data
     except Exception:
         return {"entities": [], "source": "text_ai",
                 "warning": "⚠ 파싱 실패. 직접 입력하세요."}
+
+
+def parse_pdf_document(pdf_bytes: bytes) -> dict:
+    """
+    PDF 문서 원본을 LLM에 직접 전달하여 테이블 정의를 추출합니다.
+    LLM의 네이티브 PDF 분석 기능을 활용하므로 텍스트 추출보다 정확합니다.
+
+    Args:
+        pdf_bytes: PDF 파일 바이트
+
+    Returns:
+        {"entities": [...], "source": "pdf_ai", "warning": str}
+    """
+    from aetl_llm import call_llm_with_pdf
+
+    prompt = """이 PDF 문서에서 데이터베이스 테이블 정의를 추출하세요.
+테이블명, 컬럼명, 데이터타입, PK 여부, NULL 허용, 설명 등을 최대한 정확하게 추출하세요.
+테이블 간의 관계(FK)가 있으면 함께 추출하세요.
+JSON만 응답하세요.
+
+응답 형식:
+{
+  "entities": [
+    {
+      "name": "엔티티/테이블명",
+      "fields": [
+        {"name": "필드명", "type": "데이터타입", "desc": "설명", "required": true/false}
+      ]
+    }
+  ]
+}
+"""
+    raw = call_llm_with_pdf(prompt, pdf_bytes)
+    m = re.search(r"\{[\s\S]+\}", raw)
+    if not m:
+        return {"entities": [], "source": "pdf_ai",
+                "warning": "⚠ AI가 PDF에서 구조를 추출하지 못했습니다. 텍스트 추출을 시도하세요."}
+    try:
+        data = json.loads(m.group())
+        data["source"] = "pdf_ai"
+        data["warning"] = "⚠ AI 초안입니다. 반드시 내용을 검토하고 수정하세요."
+        return data
+    except Exception:
+        return {"entities": [], "source": "pdf_ai",
+                "warning": "⚠ PDF 파싱 실패. 텍스트 추출을 시도하세요."}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -358,19 +413,5 @@ def design_to_ddl(design: dict, db_type: str = "oracle") -> str:
 # ─────────────────────────────────────────────────────────────
 
 def _call_llm(prompt: str) -> str:
-    google_key = os.getenv("GOOGLE_API_KEY")
-    if google_key:
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0)
-            return llm.invoke(prompt).content
-        except Exception:
-            pass
-
-    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-    if anthropic_key:
-        from langchain_anthropic import ChatAnthropic
-        llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0.0)
-        return llm.invoke(prompt).content
-
-    return "{}"
+    from aetl_llm import call_llm
+    return call_llm(prompt)

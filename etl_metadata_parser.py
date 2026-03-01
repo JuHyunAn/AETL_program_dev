@@ -579,7 +579,7 @@ def schema_to_metadata(schema_dict: dict, table_name: str) -> dict:
     """
     tbl_info = schema_dict.get(table_name, {})
     col_list = tbl_info.get("columns", [])
-    pk_set = set(tbl_info.get("pk", []))
+    pk_set = set(c.upper() for c in tbl_info.get("pk", []))
 
     columns = []
     for col in col_list:

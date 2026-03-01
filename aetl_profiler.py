@@ -5,7 +5,7 @@ AETL Data Profiler
 DB에 직접 연결하여 테이블·컬럼 통계를 수집합니다.
 수집된 프로파일은 AI 규칙 제안의 기반 데이터로 활용됩니다.
 
-지원 DB: Oracle, MariaDB
+지원 DB: Oracle, MariaDB, PostgreSQL
 ================================================================================
 """
 
@@ -28,7 +28,7 @@ _DOMAIN_PATTERNS = [
 ]
 
 def _infer_domain(col_name: str, data_type: str) -> str:
-    """컬럼명 + 타입 패턴으로 도메인 추론."""
+    # 컬럼명 + 타입 패턴으로 도메인 추론.
     cn = col_name.lower()
     dt = data_type.lower()
 
@@ -56,7 +56,7 @@ def _infer_domain(col_name: str, data_type: str) -> str:
 # SQL 빌더
 # ─────────────────────────────────────────────────────────────
 def _build_stats_sql_oracle(table_name: str, col_name: str) -> str:
-    """Oracle용 컬럼 통계 SQL"""
+    # Oracle용 컬럼 통계 SQL
     return f"""
 SELECT
     COUNT(*)                              AS total_cnt,
@@ -68,7 +68,7 @@ FROM "{table_name}"
 """
 
 def _build_stats_sql_mariadb(table_name: str, col_name: str) -> str:
-    """MariaDB용 컬럼 통계 SQL"""
+    # MariaDB용 컬럼 통계 SQL
     return f"""
 SELECT
     COUNT(*)                AS total_cnt,
@@ -106,11 +106,38 @@ def _build_rowcount_sql_mariadb(table_name: str) -> str:
     return f"SELECT COUNT(*) FROM `{table_name}`"
 
 
+def _build_stats_sql_postgresql(table_name: str, col_name: str) -> str:
+    # PostgreSQL용 컬럼 통계 SQL
+    return f"""
+SELECT
+    COUNT(*)                              AS total_cnt,
+    COUNT("{col_name}")                   AS non_null_cnt,
+    COUNT(DISTINCT "{col_name}")          AS distinct_cnt,
+    CAST(MIN("{col_name}") AS TEXT)       AS min_val,
+    CAST(MAX("{col_name}") AS TEXT)       AS max_val
+FROM "{table_name}"
+"""
+
+def _build_topval_sql_postgresql(table_name: str, col_name: str, top_n: int = 10) -> str:
+    # PostgreSQL용 상위 빈도값 SQL
+    return f"""
+SELECT CAST("{col_name}" AS TEXT) AS val, COUNT(*) AS cnt
+FROM "{table_name}"
+WHERE "{col_name}" IS NOT NULL
+GROUP BY "{col_name}"
+ORDER BY cnt DESC
+LIMIT {top_n}
+"""
+
+def _build_rowcount_sql_postgresql(table_name: str) -> str:
+    return f'SELECT COUNT(*) FROM "{table_name}"'
+
+
 # ─────────────────────────────────────────────────────────────
 # 컬럼 메타 조회 헬퍼
 # ─────────────────────────────────────────────────────────────
 def _get_column_info_oracle(cursor, table_name: str, owner: str | None) -> list[dict]:
-    """Oracle 컬럼 타입 정보 조회"""
+    # Oracle 컬럼 타입 정보 조회
     if owner:
         cursor.execute("""
             SELECT column_name, data_type
@@ -129,13 +156,24 @@ def _get_column_info_oracle(cursor, table_name: str, owner: str | None) -> list[
 
 
 def _get_column_info_mariadb(cursor, db_name: str, table_name: str) -> list[dict]:
-    """MariaDB 컬럼 타입 정보 조회"""
+    # MariaDB 컬럼 타입 정보 조회
     cursor.execute("""
         SELECT COLUMN_NAME, COLUMN_TYPE
         FROM information_schema.COLUMNS
         WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
         ORDER BY ORDINAL_POSITION
     """, (db_name, table_name))
+    return [{"name": r[0], "type": r[1]} for r in cursor.fetchall()]
+
+
+def _get_column_info_postgresql(cursor, schema_name: str, table_name: str) -> list[dict]:
+    # PostgreSQL 컬럼 타입 정보 조회
+    cursor.execute("""
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_schema = %s AND table_name = %s
+        ORDER BY ordinal_position
+    """, (schema_name, table_name))
     return [{"name": r[0], "type": r[1]} for r in cursor.fetchall()]
 
 
@@ -155,10 +193,10 @@ def profile_table(
     테이블 컬럼별 통계를 수집하여 프로파일 딕셔너리를 반환합니다.
 
     Parameters:
-        conn       : 활성 DB 커넥션 (oracledb / mariadb)
+        conn       : 활성 DB 커넥션 (oracledb / mariadb / psycopg2)
         table_name : 프로파일링할 테이블명
-        db_type    : "oracle" | "mariadb"
-        owner      : Oracle owner (스키마명)
+        db_type    : "oracle" | "mariadb" | "postgresql"
+        owner      : Oracle owner (스키마명) / PostgreSQL schema명
         db_name    : MariaDB database명
         top_n      : 빈도 상위 N개 값 수집 수
         skip_topval_types : top_values 수집을 건너뛸 데이터 타입 키워드
@@ -181,18 +219,35 @@ def profile_table(
           ]
         }
     """
-    is_oracle  = db_type.lower() == "oracle"
-    cursor     = conn.cursor()
+    db_type_lower = db_type.lower()
+    is_oracle     = db_type_lower == "oracle"
+    is_postgres   = db_type_lower in ("postgresql", "postgres")
+    cursor        = conn.cursor()
+
+    # PostgreSQL: "schema.table" → schema와 table 분리
+    pg_schema = owner or "public"
+    pg_table  = table_name
+    if is_postgres and "." in table_name:
+        pg_schema, pg_table = table_name.split(".", 1)
+
+    # 실제 SQL에 사용할 테이블 참조명 (PostgreSQL은 schema.table 형태)
+    sql_table_ref = f'"{pg_schema}"."{pg_table}"' if is_postgres else table_name
 
     # 1. 전체 건수
-    rc_sql = _build_rowcount_sql_oracle(table_name) if is_oracle \
-             else _build_rowcount_sql_mariadb(table_name)
+    if is_oracle:
+        rc_sql = _build_rowcount_sql_oracle(table_name)
+    elif is_postgres:
+        rc_sql = f'SELECT COUNT(*) FROM {sql_table_ref}'
+    else:
+        rc_sql = _build_rowcount_sql_mariadb(table_name)
     cursor.execute(rc_sql)
     row_count = cursor.fetchone()[0] or 0
 
     # 2. 컬럼 목록 조회
     if is_oracle:
         col_infos = _get_column_info_oracle(cursor, table_name, owner)
+    elif is_postgres:
+        col_infos = _get_column_info_postgresql(cursor, pg_schema, pg_table)
     else:
         col_infos = _get_column_info_mariadb(cursor, db_name or "", table_name)
 
@@ -203,8 +258,12 @@ def profile_table(
 
         # 3. 컬럼 통계
         try:
-            stats_sql = _build_stats_sql_oracle(table_name, cname) if is_oracle \
-                        else _build_stats_sql_mariadb(table_name, cname)
+            if is_oracle:
+                stats_sql = _build_stats_sql_oracle(table_name, cname)
+            elif is_postgres:
+                stats_sql = _build_stats_sql_postgresql(sql_table_ref, cname)
+            else:
+                stats_sql = _build_stats_sql_mariadb(table_name, cname)
             cursor.execute(stats_sql)
             row = cursor.fetchone()
             total_cnt    = int(row[0]) if row[0] else 0
@@ -222,8 +281,12 @@ def profile_table(
         skip = any(t in ctype.lower() for t in skip_topval_types)
         if not skip and row_count > 0:
             try:
-                tv_sql = _build_topval_sql_oracle(table_name, cname, top_n) if is_oracle \
-                         else _build_topval_sql_mariadb(table_name, cname, top_n)
+                if is_oracle:
+                    tv_sql = _build_topval_sql_oracle(table_name, cname, top_n)
+                elif is_postgres:
+                    tv_sql = _build_topval_sql_postgresql(sql_table_ref, cname, top_n)
+                else:
+                    tv_sql = _build_topval_sql_mariadb(table_name, cname, top_n)
                 cursor.execute(tv_sql)
                 top_values = [{"value": str(r[0]), "count": int(r[1])} for r in cursor.fetchall()]
             except Exception:
@@ -286,6 +349,20 @@ def profile_table_from_config(
         )
         result = profile_table(conn, table_name, "mariadb",
                                db_name=conn_cfg["database"], top_n=top_n)
+        conn.close()
+
+    elif db_type in ("postgresql", "postgres"):
+        import psycopg2
+        conn = psycopg2.connect(
+            host=conn_cfg["host"],
+            port=int(conn_cfg.get("port", 5432)),
+            user=conn_cfg["user"],
+            password=conn_cfg["password"],
+            dbname=conn_cfg["database"],
+        )
+        owner = config.get("schema_options", {}).get("owner")
+        result = profile_table(conn, table_name, "postgresql",
+                               owner=owner, top_n=top_n)
         conn.close()
     else:
         raise ValueError(f"지원하지 않는 db_type: {db_type}")

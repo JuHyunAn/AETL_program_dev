@@ -2112,11 +2112,40 @@ if page == "DW 설계":
                         st.error(f"파싱 오류: {e}")
 
     with input_tab_txt:
+        # ── PDF 파일 업로드 (네이티브 분석) ──
+        pdf_file = st.file_uploader(
+            "PDF 파일 업로드 (테이블 정의서, ERD, 명세서 등)",
+            type=["pdf"],
+            key="designer_pdf_file",
+        )
+        if pdf_file:
+            if st.button("PDF 전체 분석 (AI)", key="parse_pdf_native_btn", type="primary"):
+                with st.spinner("AI가 PDF 문서를 분석하고 있습니다... (문서 크기에 따라 시간이 걸릴 수 있습니다)"):
+                    try:
+                        from aetl_designer import parse_pdf_document
+                        pdf_bytes = pdf_file.read()
+                        parsed = parse_pdf_document(pdf_bytes)
+                        st.session_state["designer_entities"] = parsed.get("entities", [])
+                        st.session_state["designer_design"] = None
+                        if parsed.get("warning"):
+                            st.warning(parsed["warning"])
+                        if parsed.get("entities"):
+                            st.success(f"엔티티 {len(parsed['entities'])}개 추출 완료")
+                        elif parsed.get("error"):
+                            st.error(parsed["error"])
+                    except Exception as e:
+                        st.error(f"PDF 분석 오류: {e}")
+
+        st.divider()
+
+        # ── 자유 텍스트 입력 ──
         text_input_designer = st.text_area(
-            "테이블/엔티티 정의 텍스트 입력", height=200,
+            "테이블/엔티티 정의 텍스트 직접 입력",
+            height=200,
             placeholder="예: 고객 테이블: 고객ID(PK), 고객명, 이메일, 가입일...",
             key="designer_text",
         )
+
         st.warning("⚠ AI 초안으로 파싱됩니다. 결과를 반드시 검토 및 수정하세요.")
         if st.button("AI 텍스트 파싱", key="parse_text_designer", type="secondary"):
             if text_input_designer.strip():
@@ -2131,6 +2160,8 @@ if page == "DW 설계":
                         st.success(f"엔티티 {len(parsed.get('entities', []))}개 추출")
                     except Exception as e:
                         st.error(f"파싱 오류: {e}")
+            else:
+                st.info("텍스트를 입력하거나 위에서 PDF 파일을 업로드하세요.")
 
     if st.session_state["designer_entities"]:
         entities = st.session_state["designer_entities"]
@@ -2514,11 +2545,74 @@ elif mode == "DB 직접 연결":
         # schema = {table_name: {"columns": [...], "pk": [...], "fk": [...]}, ...}
         schema     = st.session_state["db_schema"]
         table_list = sorted(schema.keys())
+
+        # ── 역할 기반 추천 라벨 생성 ──
+        def _make_role_display_list(tables: list, role: str) -> tuple[list[str], dict[str, str]]:
+            """역할 추천 라벨이 붙은 표시 리스트와 display→실제 테이블명 매핑 반환."""
+            # 메타데이터 우선, 없으면 classify_table_role()로 즉시 분류
+            role_map: dict[str, str] = {}
+            try:
+                from aetl_metadata_engine import get_tables_with_roles
+                roles = get_tables_with_roles()
+                if roles:
+                    role_map = {r["table_name"]: r["effective_role"] for r in roles}
+            except Exception:
+                pass
+            if not role_map:
+                try:
+                    from aetl_metadata_engine import classify_table_role
+                    role_map = {t: classify_table_role(t) for t in tables}
+                except Exception:
+                    pass
+            label = "source 추천" if role == "source" else "target 추천"
+            recommended, others = [], []
+            display_to_real: dict[str, str] = {}
+            for t in tables:
+                eff = role_map.get(t, "unknown")
+                if eff == role:
+                    display = f"{t}  ({label})"
+                    recommended.append(display)
+                else:
+                    display = t
+                    others.append(display)
+                display_to_real[display] = t
+            return recommended + others, display_to_real
+
+        src_display, src_map = _make_role_display_list(table_list, "source")
+        tgt_display, tgt_map = _make_role_display_list(table_list, "target")
+
         col_src, col_tgt = st.columns(2)
         with col_src:
-            src_tbl = st.selectbox("소스 테이블", table_list, key="db_src_tbl")
+            src_sel = st.selectbox("소스 테이블", src_display, key="db_src_tbl")
+            src_tbl = src_map.get(src_sel, src_sel) if src_sel else None
         with col_tgt:
-            tgt_tbl = st.selectbox("타겟 테이블", table_list, key="db_tgt_tbl")
+            tgt_sel = st.selectbox("타겟 테이블", tgt_display, key="db_tgt_tbl")
+            tgt_tbl = tgt_map.get(tgt_sel, tgt_sel) if tgt_sel else None
+
+        # ── 테이블 역할 관리 ──
+        with st.expander("테이블 역할 관리"):
+            try:
+                from aetl_metadata_engine import get_role_summary, confirm_table_role
+                summary = get_role_summary()
+                st.caption(
+                    f"소스: {summary['source']}개 | 타겟: {summary['target']}개 | "
+                    f"미분류: {summary['unknown']}개 | 확정: {summary['confirmed']}개"
+                )
+                role_col1, role_col2, role_col3 = st.columns(3)
+                with role_col1:
+                    role_tbl = st.selectbox("테이블 선택", table_list, key="role_tbl_select")
+                with role_col2:
+                    role_val = st.selectbox("역할", ["source", "target", "unknown"], key="role_val_select")
+                with role_col3:
+                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                    if st.button("역할 확정", key="btn_confirm_role", type="primary"):
+                        if confirm_table_role(role_tbl, role_val):
+                            st.success(f"{role_tbl} → {role_val} 확정")
+                            st.rerun()
+                        else:
+                            st.error("역할 확정 실패")
+            except Exception as e:
+                st.caption(f"역할 관리 기능 로드 실패: {e}")
 
         if st.button("메타데이터 로드", key="load_db_meta", type="primary"):
             from etl_metadata_parser import schema_to_metadata

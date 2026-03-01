@@ -235,9 +235,9 @@ def _log_execution(
     affected_rows: int, config_path: str, error: str = ""
 ):
     try:
-        from aetl_store import init_db
+        from aetl_store import init_db, DB_PATH
         import sqlite3
-        db_path = "aetl_metadata.db"
+        db_path = str(DB_PATH)
         init_db(db_path)
         conn = sqlite3.connect(db_path)
         conn.execute("""
@@ -266,7 +266,8 @@ def get_execution_log(limit: int = 50) -> list[dict]:
     """실행 이력 조회"""
     try:
         import sqlite3
-        conn = sqlite3.connect("aetl_metadata.db")
+        from aetl_store import DB_PATH
+        conn = sqlite3.connect(str(DB_PATH))
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT * FROM execution_log ORDER BY id DESC LIMIT ?", (limit,)
@@ -350,23 +351,8 @@ def _build_diagnosis_prompt(
 
 
 def _call_llm(prompt: str) -> str:
-    import os
-    google_key = os.getenv("GOOGLE_API_KEY")
-    if google_key:
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0)
-            return llm.invoke(prompt).content
-        except Exception:
-            pass
-
-    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-    if anthropic_key:
-        from langchain_anthropic import ChatAnthropic
-        llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0.0)
-        return llm.invoke(prompt).content
-
-    return '{"diagnosis": "API 키 없음", "confidence": "LOW", "probing_sqls": [], "fix_sqls": []}'
+    from aetl_llm import call_llm
+    return call_llm(prompt)
 
 
 def _parse_diagnosis_response(raw: str, source_table: str, target_table: str, db_type: str) -> dict:

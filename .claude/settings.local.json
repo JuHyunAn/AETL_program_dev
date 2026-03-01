@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c:*)",
+      "Bash(python3:*)",
+      "Bash(python -u -c:*)",
+      "Bash(del \"c:\\\\Users\\\\dkswn\\\\OneDrive\\\\바탕 화면\\\\AETL_program_dev\\\\.schema_cache.json\")",
+      "Bash(cmd /c del \"c:\\\\Users\\\\dkswn\\\\OneDrive\\\\바탕 화면\\\\AETL_program_dev\\\\.schema_cache.json\")",
+      "Bash(dir /b \"c:\\\\Users\\\\dkswn\\\\OneDrive\\\\바탕 화면\\\\AETL_program_dev\\\\documents\"\")",
+      "Bash(findstr:*)",
+      "Bash(npm install)",
+      "Bash(npm run build:*)"
+    ]
+  }
+}

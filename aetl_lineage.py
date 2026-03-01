@@ -344,19 +344,5 @@ def _format_transforms(transforms: list[dict]) -> str:
 
 
 def _call_llm(prompt: str) -> str:
-    from dotenv import load_dotenv
-    load_dotenv()
-    google_key = os.getenv("GOOGLE_API_KEY")
-    if google_key:
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0)
-            return llm.invoke(prompt).content
-        except Exception:
-            pass
-    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-    if anthropic_key:
-        from langchain_anthropic import ChatAnthropic
-        llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0.0)
-        return llm.invoke(prompt).content
-    return "LLM API 키가 설정되지 않았습니다."
+    from aetl_llm import call_llm
+    return call_llm(prompt)

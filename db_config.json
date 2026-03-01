@@ -8,7 +8,7 @@
         "database": "postgres"
     },
     "schema_options": {
-        "owner": null,
+        "owner": "public",
         "include_tables": [],
         "exclude_tables": [],
         "include_views": false

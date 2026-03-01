@@ -29,30 +29,9 @@ load_dotenv()
 # ─────────────────────────────────────────
 
 def _get_llm():
-    """LLM 인스턴스 반환 (기존 app.py와 동일한 Gemini 설정)"""
-    google_api_key = os.getenv("GOOGLE_API_KEY")
-    if google_api_key:
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            return ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash",
-                google_api_key=google_api_key,
-                temperature=0.0,
-            )
-        except Exception:
-            pass
-
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    if openai_api_key:
-        from langchain_openai import ChatOpenAI
-        return ChatOpenAI(model="gpt-4o-mini", temperature=0.0, api_key=openai_api_key)
-
-    anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
-    if anthropic_api_key:
-        from langchain_anthropic import ChatAnthropic
-        return ChatAnthropic(model="claude-sonnet-4-6", temperature=0.0, api_key=anthropic_api_key)
-
-    raise RuntimeError("API 키가 없습니다. .env 파일에 GOOGLE_API_KEY, OPENAI_API_KEY, 또는 ANTHROPIC_API_KEY를 설정해주세요.")
+    """LLM 인스턴스 반환 (LLM_PROVIDER 환경변수로 프로바이더 선택 가능)"""
+    from aetl_llm import get_llm
+    return get_llm()
 
 
 # ─────────────────────────────────────────
@@ -286,12 +265,9 @@ def _generate_fallback_queries(
 
     # DB 종류별 함수
     is_oracle = db_type.lower() == "oracle"
+    is_postgres = db_type.lower() in ("postgresql", "postgres")
     except_kw = "MINUS" if is_oracle else "EXCEPT"
-    hash_fn = "ORA_HASH" if is_oracle else "MD5"
-    concat_sep = " || '|' || " if is_oracle else ", '|', "
     limit_clause = "FETCH FIRST 100 ROWS ONLY" if is_oracle else "LIMIT 100"
-    concat_fn = "" if is_oracle else "CONCAT("
-    concat_close = "" if is_oracle else ")"
 
     # ── 1. row_count_check ──
     row_count_sql = f"""-- 소스/타겟 건수 비교
@@ -360,6 +336,13 @@ HAVING COUNT(*) > 1;"""
 SELECT '소스' AS 구분, SUM(ORA_HASH({src_hash_expr})) AS CHECKSUM FROM {src}
 UNION ALL
 SELECT '타겟' AS 구분, SUM(ORA_HASH({tgt_hash_expr})) AS CHECKSUM FROM {tgt};"""
+    elif is_postgres:
+        src_concat = " || '|' || ".join([f"COALESCE(CAST({c} AS TEXT),'NULL')" for c in src_cols_for_hash])
+        tgt_concat = " || '|' || ".join([f"COALESCE(CAST({c} AS TEXT),'NULL')" for c in tgt_cols_for_hash])
+        checksum_sql = f"""-- 소스/타겟 체크섬 비교
+SELECT '소스' AS 구분, SUM(('x' || LEFT(MD5({src_concat}), 8))::bit(32)::int) AS CHECKSUM FROM {src}
+UNION ALL
+SELECT '타겟' AS 구분, SUM(('x' || LEFT(MD5({tgt_concat}), 8))::bit(32)::int) AS CHECKSUM FROM {tgt};"""
     else:
         src_concat = ", '|', ".join([f"IFNULL(CAST({c} AS CHAR),'NULL')" for c in src_cols_for_hash])
         tgt_concat = ", '|', ".join([f"IFNULL(CAST({c} AS CHAR),'NULL')" for c in tgt_cols_for_hash])
@@ -498,6 +481,7 @@ def suggest_validation_rules(
         ]
     """
     is_oracle = db_type.lower() == "oracle"
+    is_postgres = db_type.lower() in ("postgresql", "postgres")
     src_tbl   = source_profile["table_name"]
     tgt_tbl   = target_profile["table_name"] if target_profile else None
     rules: list[dict] = []
@@ -633,6 +617,13 @@ def suggest_validation_rules(
                     f"WHERE {cname} > SYSDATE + 1\n"
                     f"-- PASS 조건: future_cnt = 0"
                 )
+            elif is_postgres:
+                sql = (
+                    f"SELECT COUNT(*) AS future_cnt\n"
+                    f"FROM {src_tbl}\n"
+                    f"WHERE {cname} > NOW() + INTERVAL '1 day'\n"
+                    f"-- PASS 조건: future_cnt = 0"
+                )
             else:
                 sql = (
                     f"SELECT COUNT(*) AS future_cnt\n"
@@ -655,26 +646,16 @@ def suggest_validation_rules(
 
         # ── Tier 2: 타겟과 컬럼별 합계 비교 (금액·수량) ──
         if tgt_tbl and domain in ("amount", "count"):
-            if is_oracle:
-                sql = (
-                    f"SELECT\n"
-                    f"  ABS(s.total - t.total) AS diff,\n"
-                    f"  s.total AS src_total,\n"
-                    f"  t.total AS tgt_total\n"
-                    f"FROM (SELECT SUM(NVL({cname},0)) AS total FROM {src_tbl}) s,\n"
-                    f"     (SELECT SUM(NVL({cname},0)) AS total FROM {tgt_tbl}) t\n"
-                    f"-- PASS 조건: diff = 0"
-                )
-            else:
-                sql = (
-                    f"SELECT\n"
-                    f"  ABS(s.total - t.total) AS diff,\n"
-                    f"  s.total AS src_total,\n"
-                    f"  t.total AS tgt_total\n"
-                    f"FROM (SELECT SUM(IFNULL({cname},0)) AS total FROM {src_tbl}) s,\n"
-                    f"     (SELECT SUM(IFNULL({cname},0)) AS total FROM {tgt_tbl}) t\n"
-                    f"-- PASS 조건: diff = 0"
-                )
+            null_fn = "NVL" if is_oracle else "COALESCE" if is_postgres else "IFNULL"
+            sql = (
+                f"SELECT\n"
+                f"  ABS(s.total - t.total) AS diff,\n"
+                f"  s.total AS src_total,\n"
+                f"  t.total AS tgt_total\n"
+                f"FROM (SELECT SUM({null_fn}({cname},0)) AS total FROM {src_tbl}) s,\n"
+                f"     (SELECT SUM({null_fn}({cname},0)) AS total FROM {tgt_tbl}) t\n"
+                f"-- PASS 조건: diff = 0"
+            )
             rules.append({
                 "rule_name":     f"{src_tbl}_{cname}_SUM_MATCH",
                 "rule_type":     "sum_match",
