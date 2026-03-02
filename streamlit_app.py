@@ -9,7 +9,7 @@
 
 # 라이브러리 임포트
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 import re
 import streamlit as st

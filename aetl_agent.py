@@ -36,7 +36,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
-load_dotenv()
+load_dotenv(override=True)
 
 # ─────────────────────────────────────────────────────────────
 # State 정의
@@ -345,46 +345,6 @@ def sync_metadata_tool(tables: str = "") -> str:
         return f"메타데이터 동기화 오류: {e}"
 
 
-@tool
-def get_tables_by_role(role: str = "all") -> str:
-    """
-    역할별 테이블 목록을 조회합니다.
-    role: "source" (소스 테이블), "target" (타겟 테이블), "all" (전체 + 역할 표시)
-    사용 예: get_tables_by_role("source"), get_tables_by_role("target"), get_tables_by_role("all")
-    """
-    try:
-        from aetl_metadata_engine import get_tables_with_roles, get_role_summary
-        tables = get_tables_with_roles()
-        if not tables:
-            return "메타데이터가 없습니다. sync_metadata_tool을 먼저 실행하세요."
-
-        summary = get_role_summary()
-        header = (
-            f"역할 통계: 소스 {summary['source']}개, 타겟 {summary['target']}개, "
-            f"미분류 {summary['unknown']}개 (확정 {summary['confirmed']}개)\n\n"
-        )
-
-        if role in ("source", "target"):
-            filtered = [t for t in tables if t["effective_role"] == role]
-            label = "소스" if role == "source" else "타겟"
-            if not filtered:
-                return f"{label} 역할 테이블이 없습니다."
-            lines = [f"{header}{label} 테이블 ({len(filtered)}개):"]
-            for t in filtered:
-                status = "확정" if t["confirmed_role"] else "추천"
-                lines.append(f"  - {t['table_name']} ({status})")
-            return "\n".join(lines)
-        else:
-            lines = [f"{header}전체 테이블 ({len(tables)}개):"]
-            for t in tables:
-                eff = t["effective_role"]
-                status = "확정" if t["confirmed_role"] else "추천"
-                lines.append(f"  - {t['table_name']} [{eff}] ({status})")
-            return "\n".join(lines)
-    except Exception as e:
-        return f"역할별 테이블 조회 오류: {e}"
-
-
 # ─────────────────────────────────────────────────────────────
 # LLM 초기화
 # ─────────────────────────────────────────────────────────────
@@ -396,7 +356,6 @@ _TOOLS = [
     suggest_rules_tool,
     compare_row_counts,
     sync_metadata_tool,
-    get_tables_by_role,
 ]
 
 _TOOL_MAP = {t.name: t for t in _TOOLS}
@@ -412,16 +371,14 @@ ETL 검증 쿼리 생성, 데이터 품질 규칙 제안 등의 작업을 수행
 - suggest_rules_tool: 프로파일 기반 검증 규칙 자동 제안 (메타데이터 우선)
 - compare_row_counts: 소스·타겟 건수 직접 비교 (항상 라이브 DB)
 - sync_metadata_tool: 스키마·프로파일 메타데이터를 SQLite에 사전 수집
-- get_tables_by_role: 역할(소스/타겟)별 테이블 목록 조회 (메타데이터 기반)
 
 ## 행동 규칙
 1. 테이블명이 명확하지 않으면 search_tables로 먼저 확인하세요.
 2. 검증 쿼리 생성 전 반드시 테이블 스키마를 확인하세요.
 3. 규칙 제안 시 profile_table_tool을 먼저 호출하여 데이터 특성을 파악하세요.
 4. profile_table_tool이 "메타데이터 없음" 오류를 반환하면, sync_metadata_tool을 먼저 호출하거나 사용자에게 동기화를 안내하세요.
-5. 소스/타겟 테이블을 구분해야 할 때 get_tables_by_role을 활용하세요.
-6. 응답은 한국어로, 결과를 표나 코드블록으로 명확하게 정리하세요.
-7. DML(INSERT/UPDATE/DELETE/DROP)은 절대 실행하지 마세요.
+5. 응답은 한국어로, 결과를 표나 코드블록으로 명확하게 정리하세요.
+6. DML(INSERT/UPDATE/DELETE/DROP)은 절대 실행하지 마세요.
 """
 
 
@@ -440,9 +397,22 @@ def agent_node(state: AETLState) -> dict:
     llm_with_tools = _get_llm_with_tools()
 
     messages = list(state["messages"])
-    # System prompt 삽입 (첫 번째가 아닌 경우)
+
+    # ── db_type을 System Prompt에 동적 주입 ──
+    db_type = state.get("db_type", "oracle")
+    dynamic_prompt = (
+        _SYSTEM_PROMPT
+        + f"\n\n## 현재 연결 DB 정보\n"
+        f"- 현재 연결된 DB: **{db_type.upper()}**\n"
+        f"- 모든 Tool 호출 시 반드시 `db_type='{db_type}'`을 전달하세요.\n"
+        f"- generate_validation_queries_tool, suggest_rules_tool 호출 시 db_type 인자를 절대 생략하지 마세요.\n"
+    )
+
+    # System prompt 삽입 또는 교체
     if not messages or not isinstance(messages[0], SystemMessage):
-        messages = [SystemMessage(content=_SYSTEM_PROMPT)] + messages
+        messages = [SystemMessage(content=dynamic_prompt)] + messages
+    else:
+        messages[0] = SystemMessage(content=dynamic_prompt)
 
     response = llm_with_tools.invoke(messages)
     return {"messages": [response]}

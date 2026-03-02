@@ -18,7 +18,7 @@ import os
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 def _try_gemini():
@@ -39,7 +39,7 @@ def _try_claude():
         return None
     from langchain_anthropic import ChatAnthropic
     return ChatAnthropic(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-4-5-20250929",
         temperature=0.0,
         api_key=api_key,
     )

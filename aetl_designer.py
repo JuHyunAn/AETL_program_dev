@@ -24,7 +24,30 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
+
+
+# ─────────────────────────────────────────────────────────────
+# 0. Star Schema 설계 참고 가이드 로더
+# ─────────────────────────────────────────────────────────────
+
+_SCHEMA_GUIDE_CACHE: str | None = None
+
+
+def _load_schema_guide() -> str:
+    """documents/schema_doc.md를 읽어 LLM 프롬프트에 삽입할 참고 가이드를 반환합니다.
+    한 번 로드 후 모듈 수준 캐시에 보관하여 세션 내 일관성을 유지합니다."""
+    global _SCHEMA_GUIDE_CACHE
+    if _SCHEMA_GUIDE_CACHE is not None:
+        return _SCHEMA_GUIDE_CACHE
+
+    guide_path = os.path.join(os.path.dirname(__file__), "documents", "architecture", "schema_doc.md")
+    try:
+        with open(guide_path, "r", encoding="utf-8") as f:
+            _SCHEMA_GUIDE_CACHE = f.read()
+    except FileNotFoundError:
+        _SCHEMA_GUIDE_CACHE = ""
+    return _SCHEMA_GUIDE_CACHE
 
 
 # ─────────────────────────────────────────────────────────────
@@ -99,14 +122,29 @@ def parse_table_definition_text(text: str, max_chars: int = 12000) -> dict:
     """
     truncated = text[:max_chars]
     overflow = len(text) > max_chars
-    prompt = f"""다음 텍스트에서 데이터베이스 테이블 정의를 추출하세요.
-테이블명, 컬럼명, 데이터타입, PK 여부, NULL 허용, 설명 등을 최대한 정확하게 추출하세요.
-JSON만 응답하세요.
 
-텍스트:
+    # 스키마 설계 가이드를 참고 컨텍스트로 포함
+    guide = _load_schema_guide()
+    guide_section = ""
+    if guide:
+        guide_section = f"""
+## 참고: Star Schema 설계 가이드 (엔티티 추출 시 아래 규칙을 염두에 두세요)
+{guide[:3000]}
+"""
+
+    prompt = f"""당신은 데이터 웨어하우스 전문가입니다.
+다음 텍스트에서 데이터베이스 테이블/엔티티 정의를 추출하세요.
+{guide_section}
+## 추출 규칙
+- 테이블명, 컬럼명, 데이터타입, PK 여부, NULL 허용, 설명 등을 최대한 정확하게 추출
+- 비즈니스 프로세스에서 "측정값(Measure)"이 될 수 있는 필드와 "차원(Dimension)"이 될 수 있는 필드를 구분하여 desc에 힌트 포함
+- ID/번호/코드 같은 식별자는 PK 또는 FK 후보로 표시
+- JSON만 응답하세요
+
+## 텍스트:
 {truncated}
 
-응답 형식:
+## 응답 형식:
 {{
   "entities": [
     {{
@@ -149,22 +187,36 @@ def parse_pdf_document(pdf_bytes: bytes) -> dict:
     """
     from aetl_llm import call_llm_with_pdf
 
-    prompt = """이 PDF 문서에서 데이터베이스 테이블 정의를 추출하세요.
-테이블명, 컬럼명, 데이터타입, PK 여부, NULL 허용, 설명 등을 최대한 정확하게 추출하세요.
-테이블 간의 관계(FK)가 있으면 함께 추출하세요.
-JSON만 응답하세요.
+    # 스키마 설계 가이드를 참고 컨텍스트로 포함
+    guide = _load_schema_guide()
+    guide_section = ""
+    if guide:
+        guide_section = f"""
+## 참고: Star Schema 설계 가이드 (엔티티 추출 시 아래 규칙을 염두에 두세요)
+{guide[:3000]}
+"""
 
-응답 형식:
-{
+    prompt = f"""당신은 데이터 웨어하우스 전문가입니다.
+이 PDF 문서에서 데이터베이스 테이블/엔티티 정의를 추출하세요.
+{guide_section}
+## 추출 규칙
+- 테이블명, 컬럼명, 데이터타입, PK 여부, NULL 허용, 설명 등을 최대한 정확하게 추출
+- 테이블 간의 관계(FK)가 있으면 함께 추출
+- 비즈니스 프로세스에서 "측정값(Measure)"이 될 수 있는 필드와 "차원(Dimension)"이 될 수 있는 필드를 구분하여 desc에 힌트 포함
+- ID/번호/코드 같은 식별자는 PK 또는 FK 후보로 표시
+- JSON만 응답하세요
+
+## 응답 형식:
+{{
   "entities": [
-    {
+    {{
       "name": "엔티티/테이블명",
       "fields": [
-        {"name": "필드명", "type": "데이터타입", "desc": "설명", "required": true/false}
+        {{"name": "필드명", "type": "데이터타입", "desc": "설명", "required": true/false}}
       ]
-    }
+    }}
   ]
-}
+}}
 """
     raw = call_llm_with_pdf(prompt, pdf_bytes)
     m = re.search(r"\{[\s\S]+\}", raw)
@@ -200,14 +252,38 @@ def design_star_schema(entities: list[dict], context: str = "") -> dict:
     """
     entities_json = json.dumps(entities, ensure_ascii=False, indent=2)[:3000]
 
-    prompt = f"""당신은 데이터 웨어하우스 아키텍트입니다.
-다음 엔티티 구조를 분석하여 3-Layer DW 모델을 설계하세요.
+    # 스키마 설계 가이드를 참고 컨텍스트로 포함
+    guide = _load_schema_guide()
+
+    prompt = f"""당신은 Kimball 방법론에 정통한 데이터 웨어하우스 아키텍트입니다.
+다음 엔티티 구조를 분석하여 3-Layer DW 모델(ODS → DW Star Schema → DM)을 설계하세요.
+
+## Star Schema 설계 참고 가이드
+{guide}
 
 ## 엔티티 목록
 {entities_json}
 
 ## 추가 맥락
 {context or "없음"}
+
+## 설계 절차 (Kimball 4단계를 따르세요)
+1. 비즈니스 프로세스 식별: 엔티티에서 측정/분석 대상 파악
+2. Grain 선언: 각 Fact 테이블의 최소 행 단위 명확히 정의
+3. Dimension 식별: "누가, 언제, 어디서, 무엇을, 어떻게"에 해당하는 맥락 분리
+4. Fact(Measure) 식별: 집계 가능한 수치 (금액, 수량, 횟수, 비율 등)
+
+## 설계 규칙
+- ODS 테이블: 원본 그대로 + ETL_DT(적재일시), BATCH_ID 컬럼 추가
+- FACT 테이블: SK_ 접두사 대리키(PK) + Dimension FK + Measure 컬럼
+- DIM 테이블: SK_ 대리키(PK) + Natural Key + 속성 컬럼, SCD Type 명시
+- DIM_DATE: 날짜/시간 관련 필드가 있으면 반드시 추가
+- Conformed Dimension: 여러 Fact에서 공유할 수 있는 Dimension은 통합
+- Junk Dimension: 소수 값 플래그/코드는 통합 Dimension으로
+- Degenerate Dimension: 주문번호 등 식별자는 Fact에 직접 포함
+- DM 테이블: 분석 목적에 맞는 사전 집계 테이블
+- Fact ↔ Dimension 관계는 항상 N:1
+- 모든 컬럼 타입은 Oracle 기준
 
 ## 응답 형식 (JSON만)
 {{
@@ -225,7 +301,7 @@ def design_star_schema(entities: list[dict], context: str = "") -> dict:
     {{
       "name": "FACT_xxx",
       "comment": "설명",
-      "grain": "행 단위 설명",
+      "grain": "행 단위 설명 (예: 주문 1건당 1행)",
       "columns": [...],
       "measures": ["측정값 컬럼명 목록"]
     }}
@@ -251,22 +327,37 @@ def design_star_schema(entities: list[dict], context: str = "") -> dict:
     {{"from": "FACT_xxx", "to": "DIM_xxx", "fk": "fk_컬럼명", "type": "N:1"}}
   ]
 }}
-
-규칙:
-- ODS 테이블에는 ETL_DT (적재일시), BATCH_ID 컬럼 추가
-- FACT 테이블의 PK는 SK_ 접두사 사용 (대리키)
-- DIM 테이블도 SK_ 대리키 + 자연키 구분
-- 날짜/시간 관련 → DIM_DATE 자동 추가
-- 모든 컬럼 타입은 Oracle 기준
 """
     raw = _call_llm(prompt)
+
+    # LLM 에러 응답 감지 — call_llm()이 실패 시 '{"error": "..."}' 형태를 반환
+    if '"error"' in raw and "LLM 호출 실패" in raw:
+        raise RuntimeError(f"LLM 호출 실패: {raw}")
+
     m = re.search(r"\{[\s\S]+\}", raw)
     if not m:
-        return {"ods_tables": [], "fact_tables": [], "dim_tables": [], "dm_tables": [], "relationships": []}
+        raise RuntimeError(
+            f"LLM 응답에서 JSON을 추출할 수 없습니다.\n"
+            f"응답 미리보기: {raw[:500]}"
+        )
     try:
-        return json.loads(m.group())
-    except Exception:
-        return {"ods_tables": [], "fact_tables": [], "dim_tables": [], "dm_tables": [], "relationships": []}
+        result = json.loads(m.group())
+    except Exception as e:
+        raise RuntimeError(
+            f"LLM 응답 JSON 파싱 실패: {e}\n"
+            f"응답 미리보기: {raw[:500]}"
+        )
+
+    # 결과에 필수 키가 없으면 (에러 JSON이 파싱된 경우 등) 에러로 처리
+    if not any(result.get(k) for k in ("ods_tables", "fact_tables", "dim_tables")):
+        if "error" in result:
+            raise RuntimeError(f"LLM 오류: {result['error']}")
+        raise RuntimeError(
+            f"LLM이 빈 설계 결과를 반환했습니다. 프롬프트를 확인하세요.\n"
+            f"응답 미리보기: {raw[:500]}"
+        )
+
+    return result
 
 
 # ─────────────────────────────────────────────────────────────

@@ -304,7 +304,7 @@ def diagnose_failure(
     """
     import os
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(override=True)
 
     # 1. 진단 프롬프트 빌드
     prompt = _build_diagnosis_prompt(validation_name, result, source_table, target_table, db_type)

@@ -323,7 +323,7 @@ def profile_table_from_config(
     """
     import os
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(override=True)
 
     from db_schema import load_config
     config = load_config(config_path)

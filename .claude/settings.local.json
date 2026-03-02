@@ -9,7 +9,12 @@
       "Bash(dir /b \"c:\\\\Users\\\\dkswn\\\\OneDrive\\\\바탕 화면\\\\AETL_program_dev\\\\documents\"\")",
       "Bash(findstr:*)",
       "Bash(npm install)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(pip show:*)",
+      "WebFetch(domain:ai.google.dev)",
+      "Bash(pip install:*)",
+      "Bash(sort:*)",
+      "WebFetch(domain:www.kimballgroup.com)"
     ]
   }
 }

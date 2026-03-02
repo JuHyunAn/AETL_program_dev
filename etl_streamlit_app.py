@@ -731,6 +731,8 @@ if "page" not in st.session_state:
     st.session_state["page"] = "검증 쿼리 생성"
 if "global_mode" not in st.session_state:
     st.session_state["global_mode"] = "파일 업로드"
+if "_prev_global_mode" not in st.session_state:
+    st.session_state["_prev_global_mode"] = st.session_state["global_mode"]
 if "_sidebar_conn_open" not in st.session_state:
     st.session_state["_sidebar_conn_open"] = False
 
@@ -752,6 +754,25 @@ with st.sidebar:
         key="global_mode_radio",
     )
     st.session_state["global_mode"] = mode
+
+    # ── 데이터 소스 변경 시 전체 초기화 ──────────────
+    if mode != st.session_state.get("_prev_global_mode"):
+        _reset_keys_none = [
+            "source_meta", "target_meta", "mapping", "queries",
+            "profile_result", "profile_rules",
+            "exec_result", "exec_diagnosis", "exec_sql_type",
+            "export_excel_bytes", "export_ddl", "export_merge_sql",
+            "export_report_bytes", "export_json_str", "export_csv_str",
+            "tpl_structure", "tpl_bytes", "tpl_suggestions",
+            "designer_entities", "designer_design", "designer_ddl",
+            "lineage_result", "lineage_graph", "lineage_explanation",
+        ]
+        for _rk in _reset_keys_none:
+            st.session_state[_rk] = None
+        st.session_state["agent_history"] = []
+        st.session_state["flow_map_mappings"] = []
+        st.session_state["_prev_global_mode"] = mode
+        st.rerun()
 
     if mode == "DB 직접 연결":
         _db_type_opts = ["oracle", "mariadb", "postgresql"]
@@ -2184,6 +2205,17 @@ if page == "DW 설계":
         st.markdown('<div class="step-row"><span class="step-num">3</span><span class="step-text">Star Schema 설계 (AI)</span></div>', unsafe_allow_html=True)
         st.caption("AI가 ODS / DW (Fact + Dim) / DM 3-Layer 스타 스키마를 설계합니다.")
 
+        # 스키마 설계 가이드 로드 상태 표시
+        try:
+            from aetl_designer import _load_schema_guide
+            _guide_text = _load_schema_guide()
+            if _guide_text:
+                st.caption("📖 Star Schema 설계 가이드 적용됨 — Kimball 방법론 기반")
+            else:
+                st.caption("⚠ documents/architecture/schema_doc.md 파일을 찾을 수 없습니다. 기본 설계 규칙으로 진행합니다.")
+        except Exception:
+            pass
+
         if st.button("AI 스키마 설계 실행", key="design_schema_btn", type="primary"):
             with st.spinner("AI 설계 중... (30초 이내 완료)"):
                 try:
@@ -2229,6 +2261,7 @@ if page == "DW 설계":
         with layer_tab3:
             _render_tbl_list(design.get("dm_tables", []))
         with layer_tab4:
+            from erd_flow_component import erd_flow_map, build_erd_data, build_flow_data
             erd_sub1, erd_sub2 = st.tabs(["ERD 다이어그램", "레이어 흐름도"])
             with erd_sub1:
                 erd_layer = st.selectbox(
@@ -2238,16 +2271,28 @@ if page == "DW 설계":
                     key="erd_layer_select",
                 )
                 try:
-                    from aetl_designer import generate_mermaid_erd
-                    mermaid_erd = generate_mermaid_erd(design, erd_layer)
-                    st.markdown(f"```mermaid\n{mermaid_erd}\n```")
+                    erd_nodes, erd_edges = build_erd_data(design, erd_layer)
+                    erd_flow_map(
+                        nodes=erd_nodes,
+                        edges=erd_edges,
+                        height=620,
+                        direction="TB",
+                        mode="erd",
+                        key="erd_diagram_main",
+                    )
                 except Exception as e:
                     st.error(f"ERD 생성 오류: {e}")
             with erd_sub2:
                 try:
-                    from aetl_designer import generate_mermaid_flow
-                    mermaid_flow = generate_mermaid_flow(design)
-                    st.markdown(f"```mermaid\n{mermaid_flow}\n```")
+                    flow_nodes, flow_edges = build_flow_data(design)
+                    erd_flow_map(
+                        nodes=flow_nodes,
+                        edges=flow_edges,
+                        height=520,
+                        direction="LR",
+                        mode="flow",
+                        key="layer_flow_main",
+                    )
                 except Exception as e:
                     st.error(f"흐름도 생성 오류: {e}")
 
@@ -2270,7 +2315,7 @@ if page == "DW 설계":
         if st.session_state["designer_ddl"]:
             st.code(st.session_state["designer_ddl"], language="sql")
             st.download_button(
-                "📥 DDL 다운로드 (.sql)",
+                "DDL 다운로드 (.sql)",
                 data=st.session_state["designer_ddl"],
                 file_name="dw_schema_ddl.sql",
                 mime="text/plain",
@@ -2578,41 +2623,104 @@ elif mode == "DB 직접 연결":
                 display_to_real[display] = t
             return recommended + others, display_to_real
 
+        # ── 타겟 테이블 자동 필터링 (PK + 컬럼 유사도 기반) ──
+        import re as _re
+
+        _ALL_PREFIXES = _re.compile(
+            r"^(ods_|stg_|dw_|raw_|src_|ext_|load_|dm_|fact_|dim_|f_|d_|rpt_|agg_|mart_)",
+            _re.IGNORECASE,
+        )
+
+        def _extract_entity(table_name: str) -> str:
+            """schema.table에서 프리픽스를 제거한 엔티티명 추출."""
+            tbl = table_name.rsplit(".", 1)[-1]          # schema 부분 제거
+            return _ALL_PREFIXES.sub("", tbl).lower()
+
+        def _get_col_names(tbl: str) -> set[str]:
+            """테이블의 컬럼명 집합 반환 (소문자)."""
+            cols = schema.get(tbl, {}).get("columns", [])
+            return {c["name"].lower() for c in cols if isinstance(c, dict)}
+
+        def _get_pk_names(tbl: str) -> set[str]:
+            """테이블의 PK 컬럼명 집합 반환 (소문자)."""
+            pk = schema.get(tbl, {}).get("pk", [])
+            return {p.lower() for p in pk}
+
+        def _score_target(src: str, tgt: str) -> float:
+            """소스-타겟 유사도 점수 (0.0 ~ 1.0)."""
+            if src == tgt:
+                return 0.0  # 자기 자신은 타겟이 될 수 없음
+
+            src_cols = _get_col_names(src)
+            tgt_cols = _get_col_names(tgt)
+            src_pk   = _get_pk_names(src)
+
+            if not tgt_cols:
+                return 0.0
+
+            # 1) PK 포함 점수 (0.4): 소스 PK가 타겟 컬럼에 존재하는 비율
+            pk_score = 0.0
+            if src_pk:
+                pk_overlap = src_pk & tgt_cols
+                pk_score = len(pk_overlap) / len(src_pk)
+
+            # 2) 컬럼 겹침 점수 (0.4): 소스 컬럼 중 타겟에도 있는 비율
+            col_score = 0.0
+            if src_cols:
+                col_overlap = src_cols & tgt_cols
+                col_score = len(col_overlap) / len(src_cols)
+
+            # 3) 엔티티명 유사도 보너스 (0.2): 프리픽스 제거 후 이름 일치
+            src_entity = _extract_entity(src)
+            tgt_entity = _extract_entity(tgt)
+            name_score = 0.0
+            if src_entity and tgt_entity:
+                if src_entity == tgt_entity:
+                    name_score = 1.0
+                elif src_entity in tgt_entity or tgt_entity in src_entity:
+                    name_score = 0.5
+
+            return pk_score * 0.4 + col_score * 0.4 + name_score * 0.2
+
+        def _filter_targets(src: str, tables: list[str], threshold: float = 0.3) -> list[str]:
+            """소스 테이블과 유사도가 threshold 이상인 타겟 테이블만 반환 (점수 내림차순)."""
+            scored = []
+            for t in tables:
+                s = _score_target(src, t)
+                if s >= threshold:
+                    scored.append((t, s))
+            scored.sort(key=lambda x: x[1], reverse=True)
+            return [t for t, _ in scored]
+
         src_display, src_map = _make_role_display_list(table_list, "source")
-        tgt_display, tgt_map = _make_role_display_list(table_list, "target")
 
         col_src, col_tgt = st.columns(2)
         with col_src:
             src_sel = st.selectbox("소스 테이블", src_display, key="db_src_tbl")
             src_tbl = src_map.get(src_sel, src_sel) if src_sel else None
+
         with col_tgt:
+            # 타겟 필터링 토글
+            _filter_on = st.checkbox(
+                "타겟 자동 필터링",
+                value=False,
+                key="tgt_filter_enabled",
+                help="소스 테이블의 PK·컬럼 유사도를 기반으로 관련 타겟 테이블만 표시합니다.",
+            )
+
+            if _filter_on and src_tbl:
+                _filtered = _filter_targets(src_tbl, table_list)
+                if _filtered:
+                    tgt_base = _filtered
+                else:
+                    st.caption("⚠ 유사 타겟 없음 — 전체 목록 표시")
+                    tgt_base = table_list
+            else:
+                tgt_base = table_list
+
+            tgt_display, tgt_map = _make_role_display_list(tgt_base, "target")
             tgt_sel = st.selectbox("타겟 테이블", tgt_display, key="db_tgt_tbl")
             tgt_tbl = tgt_map.get(tgt_sel, tgt_sel) if tgt_sel else None
-
-        # ── 테이블 역할 관리 ──
-        with st.expander("테이블 역할 관리"):
-            try:
-                from aetl_metadata_engine import get_role_summary, confirm_table_role
-                summary = get_role_summary()
-                st.caption(
-                    f"소스: {summary['source']}개 | 타겟: {summary['target']}개 | "
-                    f"미분류: {summary['unknown']}개 | 확정: {summary['confirmed']}개"
-                )
-                role_col1, role_col2, role_col3 = st.columns(3)
-                with role_col1:
-                    role_tbl = st.selectbox("테이블 선택", table_list, key="role_tbl_select")
-                with role_col2:
-                    role_val = st.selectbox("역할", ["source", "target", "unknown"], key="role_val_select")
-                with role_col3:
-                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                    if st.button("역할 확정", key="btn_confirm_role", type="primary"):
-                        if confirm_table_role(role_tbl, role_val):
-                            st.success(f"{role_tbl} → {role_val} 확정")
-                            st.rerun()
-                        else:
-                            st.error("역할 확정 실패")
-            except Exception as e:
-                st.caption(f"역할 관리 기능 로드 실패: {e}")
 
         if st.button("메타데이터 로드", key="load_db_meta", type="primary"):
             from etl_metadata_parser import schema_to_metadata

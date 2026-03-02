@@ -1,0 +1,111 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "이커머스 주문관리 API",
+    "description": "온라인 쇼핑몰 주문/결제/배송 관리 시스템",
+    "version": "1.0.0"
+  },
+  "components": {
+    "schemas": {
+      "Customer": {
+        "description": "고객 정보",
+        "required": ["customer_id", "customer_name", "email"],
+        "properties": {
+          "customer_id": { "type": "string", "description": "고객 고유 ID" },
+          "customer_name": { "type": "string", "description": "고객명" },
+          "email": { "type": "string", "format": "email", "description": "이메일 주소" },
+          "phone": { "type": "string", "description": "연락처" },
+          "gender_cd": { "type": "string", "description": "성별 코드 (M/F)" },
+          "birth_date": { "type": "string", "format": "date", "description": "생년월일" },
+          "membership_grade": { "type": "string", "description": "회원 등급 (BRONZE/SILVER/GOLD/VIP)" },
+          "region_cd": { "type": "string", "description": "거주 지역 코드" },
+          "join_date": { "type": "string", "format": "date", "description": "가입일" },
+          "is_active": { "type": "boolean", "description": "활성 여부" }
+        }
+      },
+      "Product": {
+        "description": "상품 정보",
+        "required": ["product_id", "product_name", "category_cd"],
+        "properties": {
+          "product_id": { "type": "string", "description": "상품 고유 ID" },
+          "product_name": { "type": "string", "description": "상품명" },
+          "category_cd": { "type": "string", "description": "카테고리 코드" },
+          "category_name": { "type": "string", "description": "카테고리명" },
+          "sub_category": { "type": "string", "description": "하위 카테고리" },
+          "brand": { "type": "string", "description": "브랜드명" },
+          "unit_price": { "type": "number", "format": "decimal", "description": "단가 (원)" },
+          "cost_price": { "type": "number", "format": "decimal", "description": "원가 (원)" },
+          "supplier_cd": { "type": "string", "description": "공급업체 코드" },
+          "is_available": { "type": "boolean", "description": "판매 가능 여부" },
+          "registered_date": { "type": "string", "format": "date", "description": "상품 등록일" }
+        }
+      },
+      "Order": {
+        "description": "주문 헤더",
+        "required": ["order_id", "customer_id", "order_date"],
+        "properties": {
+          "order_id": { "type": "string", "description": "주문 고유 ID" },
+          "customer_id": { "type": "string", "description": "고객 ID (FK → Customer)" },
+          "order_date": { "type": "string", "format": "date-time", "description": "주문 일시" },
+          "order_status": { "type": "string", "description": "주문 상태 (PENDING/CONFIRMED/SHIPPED/DELIVERED/CANCELLED)" },
+          "payment_method": { "type": "string", "description": "결제 수단 (CARD/BANK/POINT/MOBILE)" },
+          "shipping_address": { "type": "string", "description": "배송 주소" },
+          "shipping_region_cd": { "type": "string", "description": "배송 지역 코드" },
+          "total_amount": { "type": "number", "format": "decimal", "description": "주문 총액 (원)" },
+          "discount_amount": { "type": "number", "format": "decimal", "description": "할인 금액 (원)" },
+          "coupon_cd": { "type": "string", "description": "사용 쿠폰 코드" },
+          "channel_cd": { "type": "string", "description": "주문 채널 (WEB/APP/STORE)" }
+        }
+      },
+      "OrderDetail": {
+        "description": "주문 상세 (주문 내 개별 상품)",
+        "required": ["order_id", "line_no", "product_id", "quantity"],
+        "properties": {
+          "order_id": { "type": "string", "description": "주문 ID (FK → Order)" },
+          "line_no": { "type": "integer", "description": "주문 라인 번호" },
+          "product_id": { "type": "string", "description": "상품 ID (FK → Product)" },
+          "quantity": { "type": "integer", "description": "주문 수량" },
+          "unit_price": { "type": "number", "format": "decimal", "description": "주문 당시 단가" },
+          "line_amount": { "type": "number", "format": "decimal", "description": "라인 합계 (수량 x 단가)" },
+          "discount_rate": { "type": "number", "format": "float", "description": "할인율 (%)" }
+        }
+      },
+      "Shipment": {
+        "description": "배송 정보",
+        "required": ["shipment_id", "order_id"],
+        "properties": {
+          "shipment_id": { "type": "string", "description": "배송 고유 ID" },
+          "order_id": { "type": "string", "description": "주문 ID (FK → Order)" },
+          "carrier_cd": { "type": "string", "description": "택배사 코드" },
+          "tracking_no": { "type": "string", "description": "운송장 번호" },
+          "ship_date": { "type": "string", "format": "date", "description": "발송일" },
+          "delivery_date": { "type": "string", "format": "date", "description": "배송 완료일" },
+          "shipping_cost": { "type": "number", "format": "decimal", "description": "배송비 (원)" },
+          "shipment_status": { "type": "string", "description": "배송 상태 (PREPARING/SHIPPED/IN_TRANSIT/DELIVERED/RETURNED)" }
+        }
+      },
+      "Region": {
+        "description": "지역 마스터",
+        "required": ["region_cd"],
+        "properties": {
+          "region_cd": { "type": "string", "description": "지역 코드" },
+          "region_name": { "type": "string", "description": "지역명 (시/도)" },
+          "city_name": { "type": "string", "description": "도시명 (시/군/구)" },
+          "zone_type": { "type": "string", "description": "권역 구분 (수도권/영남/호남/충청/강원/제주)" }
+        }
+      },
+      "Supplier": {
+        "description": "공급업체 정보",
+        "required": ["supplier_cd", "supplier_name"],
+        "properties": {
+          "supplier_cd": { "type": "string", "description": "공급업체 코드" },
+          "supplier_name": { "type": "string", "description": "공급업체명" },
+          "contact_name": { "type": "string", "description": "담당자명" },
+          "contact_phone": { "type": "string", "description": "담당자 연락처" },
+          "contract_start": { "type": "string", "format": "date", "description": "계약 시작일" },
+          "contract_end": { "type": "string", "format": "date", "description": "계약 종료일" }
+        }
+      }
+    }
+  }
+}

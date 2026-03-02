@@ -21,7 +21,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 # ─────────────────────────────────────────
@@ -88,6 +88,8 @@ PK: {target_pk}
 3. {db_type} 문법 사용
 4. 컬럼 매핑이 있으면 매핑된 컬럼명으로 비교
 5. PK가 없으면 모든 컬럼을 비교 대상으로 사용
+6. 체크섬(해시) 생성 시 반드시 컬럼 사이에 '|' 구분자를 삽입하여 해시 충돌을 방지하세요.
+7. UNION ALL 내부 각 분기에 행 제한이 필요한 경우, 반드시 서브쿼리로 감싸세요.
 
 ## 출력 형식 (반드시 JSON만 출력, 마크다운 코드블록 없이)
 {{
@@ -140,9 +142,20 @@ _DB_NOTES = {
 
     "postgresql": textwrap.dedent("""
     PostgreSQL 전용 주의사항:
-    - EXCEPT 사용 가능
+    - EXCEPT 사용 가능 (MINUS 사용 금지!)
     - 행 제한: LIMIT N
-    - 체크섬: MD5()::text 또는 hashtext() 사용
+    - [중요] UNION ALL과 LIMIT을 함께 사용할 때:
+      - UNION ALL 각 분기 안에 LIMIT을 직접 넣으면 문법 오류 발생!
+      - 반드시 서브쿼리로 감싸거나 CTE + 최종 LIMIT 패턴 사용:
+        올바른 예시 1 (서브쿼리):
+          SELECT * FROM (SELECT ... LIMIT 10) s
+          UNION ALL
+          SELECT * FROM (SELECT ... LIMIT 10) t
+        올바른 예시 2 (CTE + 최종 LIMIT):
+          WITH cte AS (SELECT ... EXCEPT SELECT ...)
+          SELECT * FROM cte LIMIT 10
+    - 체크섬: MD5()::text 사용, 반드시 컬럼 사이에 '|' 구분자 삽입
+      예: MD5(col1::text || '|' || col2::text)
     - 문자열 연결: || 또는 CONCAT() 사용
     - NULL 비교: COALESCE() 사용
     - 현재 날짜: NOW()
@@ -234,10 +247,73 @@ def _parse_llm_response(
         for k in expected_keys:
             if k not in result:
                 result[k] = {"description": k, "sql": "-- LLM이 생성하지 않은 쿼리"}
-        return result
+        return _post_validate_sql(result, db_type)
     except json.JSONDecodeError:
         # 파싱 실패 시 rule-based 폴백
         return _generate_fallback_queries(source_meta, target_meta, db_type, column_mapping)
+
+
+# ─────────────────────────────────────────
+# AI 생성 SQL 후처리 검증
+# ─────────────────────────────────────────
+
+def _post_validate_sql(queries: dict, db_type: str) -> dict:
+    """AI가 생성한 SQL에 대한 후처리 검증 및 자동 치환"""
+    is_oracle = db_type.lower() == "oracle"
+    is_postgres = db_type.lower() in ("postgresql", "postgres")
+
+    for key, item in queries.items():
+        sql = item.get("sql", "")
+        if not sql:
+            continue
+
+        if is_postgres:
+            # MINUS → EXCEPT 치환
+            sql = re.sub(r'\bMINUS\b', 'EXCEPT', sql, flags=re.IGNORECASE)
+            # UNION ALL 중간의 bare LIMIT → 서브쿼리로 래핑
+            sql = _wrap_limit_in_union(sql)
+        elif is_oracle:
+            # LIMIT N → FETCH FIRST N ROWS ONLY 치환
+            sql = re.sub(
+                r'\bLIMIT\s+(\d+)\b',
+                r'FETCH FIRST \1 ROWS ONLY',
+                sql, flags=re.IGNORECASE
+            )
+            # EXCEPT → MINUS 치환
+            sql = re.sub(r'\bEXCEPT\b', 'MINUS', sql, flags=re.IGNORECASE)
+
+        item["sql"] = sql
+
+    return queries
+
+
+def _wrap_limit_in_union(sql: str) -> str:
+    """UNION ALL 중간의 각 분기에 bare LIMIT이 있으면 서브쿼리로 래핑"""
+    # UNION ALL이 없으면 그대로 반환
+    if not re.search(r'\bUNION\s+ALL\b', sql, re.IGNORECASE):
+        return sql
+
+    parts = re.split(r'(\bUNION\s+ALL\b)', sql, flags=re.IGNORECASE)
+    result = []
+    for part in parts:
+        stripped = part.strip()
+        # UNION ALL 키워드 자체는 그대로 유지
+        if re.match(r'\bUNION\s+ALL\b', stripped, re.IGNORECASE):
+            result.append(part)
+        # SELECT 분기에 LIMIT이 있으면 서브쿼리로 래핑
+        elif re.search(r'\bLIMIT\s+\d+', stripped, re.IGNORECASE) and \
+             re.match(r'\s*SELECT\b', stripped, re.IGNORECASE) and \
+             not stripped.lstrip().startswith('('):
+            # 끝의 세미콜론 분리
+            clean = stripped.rstrip(';').strip()
+            had_semi = stripped.rstrip().endswith(';')
+            wrapped = f"SELECT * FROM ({clean}) _sub"
+            if had_semi:
+                wrapped += ';'
+            result.append(wrapped)
+        else:
+            result.append(part)
+    return '\n'.join(result)
 
 
 # ─────────────────────────────────────────
@@ -275,11 +351,23 @@ SELECT '소스({src})' AS 구분, COUNT(*) AS 건수 FROM {src}
 UNION ALL
 SELECT '타겟({tgt})' AS 구분, COUNT(*) AS 건수 FROM {tgt};"""
 
-    # ── 2. pk_missing_check ──
+    # ── 2. pk_missing_check (Source EXCEPT Target) ──
     if src_pk:
         pk_select_src = ", ".join(src_pk)
         pk_select_tgt = ", ".join(col_map.get(p, p) for p in src_pk)
-        pk_missing_sql = f"""-- 소스에 있지만 타겟에 없는 PK
+        if is_postgres:
+            pk_missing_sql = f"""-- 소스에 있지만 타겟에 없는 PK (PostgreSQL CTE 방식)
+WITH src_data AS (SELECT {pk_select_src} FROM {src}),
+     tgt_data AS (SELECT {pk_select_tgt} FROM {tgt}),
+     missing AS (
+         SELECT * FROM src_data
+         EXCEPT
+         SELECT * FROM tgt_data
+     )
+SELECT * FROM missing
+{limit_clause};"""
+        else:
+            pk_missing_sql = f"""-- 소스에 있지만 타겟에 없는 PK
 SELECT {pk_select_src}
 FROM {src}
 {except_kw}
@@ -379,7 +467,24 @@ WHERE
    {diff_cond_str}
 {limit_clause};"""
     else:
-        full_diff_sql = f"""-- PK 없음: 전체 소스-타겟 차이 확인
+        if is_postgres:
+            half_limit = 50
+            full_diff_sql = f"""-- PK 없음: 데이터 불일치 확인 (PostgreSQL bidirectional CTE)
+WITH source_only AS (
+    SELECT * FROM {src}
+    EXCEPT
+    SELECT * FROM {tgt}
+),
+target_only AS (
+    SELECT * FROM {tgt}
+    EXCEPT
+    SELECT * FROM {src}
+)
+SELECT * FROM (SELECT '소스에만 존재' AS diff_type, * FROM source_only LIMIT {half_limit}) s
+UNION ALL
+SELECT * FROM (SELECT '타겟에만 존재' AS diff_type, * FROM target_only LIMIT {half_limit}) t;"""
+        else:
+            full_diff_sql = f"""-- PK 없음: 전체 소스-타겟 차이 확인
 -- 소스에만 있는 데이터
 SELECT * FROM {src}
 {except_kw}
