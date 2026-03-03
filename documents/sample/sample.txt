@@ -1,1 +1,8 @@
-지역별 제품 주문 현황에 대한 전반적인 상세 내용을 확인하고 시각적으로 BI 툴에서 활용하기 위함
+postgreSQL localhost 연결
+- src.employee (source 추천) 선택
+- dw.dim_employee (target 추천) 선택
+
+
+
+DW 설계 맥락
+- B2B 기업의 매출 분석 및 경영 KPI 분석을 위한 데이터웨어하우스 설계

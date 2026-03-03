@@ -145,6 +145,25 @@ Claude API 키는 [Claude](https://claude.com/)에서 발급받을 수 있습니
         "ttl_seconds": 3600
     }
 }
+
+## 사업부 DB
+DB : Mysql 
+Server host : 10.0.11.98
+Port : 3306
+Database : wise_bigdata_hq
+User name : root
+Password : wise1012
+
+## 클라우드 DB
+DB : postgresql 
+Server host : aws-1-ap-northeast-2.pooler.supabase.com
+Port : 6543
+Database : postgres
+User name : postgres.qxxqxgbmzsmjcxcmctgd
+Password : @Kyalsms8850
+
+
+
 ```
 
 ### 설정 항목 설명

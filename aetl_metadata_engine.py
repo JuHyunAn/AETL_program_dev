@@ -48,7 +48,7 @@ _SOURCE_PATTERNS = re.compile(
 _TARGET_PATTERNS = re.compile(
     r"^(dm_|fact_|dim_|f_|d_|rpt_|agg_|mart_)", re.IGNORECASE
 )
-_SOURCE_SCHEMA_HINTS = {"ods", "stg", "staging", "raw", "source", "dw"}
+_SOURCE_SCHEMA_HINTS = {"ods", "stg", "staging", "raw", "source", "dw", "src"}
 _TARGET_SCHEMA_HINTS = {"dm", "mart", "marts", "analytics", "report", "bi"}
 
 
