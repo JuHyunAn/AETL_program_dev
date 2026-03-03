@@ -399,6 +399,21 @@ div.stDownloadButton > button:hover span,
 div.stDownloadButton > button:hover div {
     color: #0070C0 !important;
 }
+/* Download 버튼 — Primary (파란색) */
+div.dl-primary div.stDownloadButton > button {
+    background-color: #0070C0 !important;
+    color: #FFFFFF !important;
+    border-color: #0070C0 !important;
+}
+div.dl-primary div.stDownloadButton > button p,
+div.dl-primary div.stDownloadButton > button span,
+div.dl-primary div.stDownloadButton > button div {
+    color: #FFFFFF !important;
+}
+div.dl-primary div.stDownloadButton > button:hover {
+    background-color: #005A9E !important;
+    border-color: #005A9E !important;
+}
 
 /* ══════════════════════════════════════
    파일 업로더
@@ -1770,10 +1785,15 @@ if page == "매핑 자동화":
         )
 
     # ── [산출물 생성] + [Flow Map 생성] — 두 버튼으로 분리 ──
-    _btn_col1, _btn_col2 = st.columns([3, 2])
+    _btn_col1, _btn_col2, _btn_col3 = st.columns([3, 1, 2])
     with _btn_col1:
         _do_export = st.button("산출물 생성", key="gen_all_exports", type="primary", use_container_width=True)
     with _btn_col2:
+        _selected_load_type = st.selectbox(
+            "로드 유형", ["MERGE", "INSERT", "FULL_LOAD", "UPSERT"],
+            key="export_load_type", label_visibility="collapsed",
+        )
+    with _btn_col3:
         _do_flowmap = st.button("Flow Map 생성", key="gen_flow_map", type="secondary", use_container_width=True)
         st.caption("'ETL Lineage' 메뉴에서 Lineage 시각화를 생성합니다.")
 
@@ -1828,7 +1848,7 @@ if page == "매핑 자동화":
                 "mapping_id":  mapping_id,
                 "source_meta": src_meta,
                 "target_meta": tgt_meta,
-                "load_type":   "MERGE",
+                "load_type":   st.session_state.get("export_load_type", "MERGE"),
             }
             _existing = st.session_state["flow_map_mappings"]
             _ids = [m["mapping_id"] for m in _existing]
@@ -1846,6 +1866,7 @@ if page == "매핑 자동화":
     dl_cols = st.columns(4)
     with dl_cols[0]:
         if st.session_state["export_excel_bytes"]:
+            st.markdown('<div class="dl-primary">', unsafe_allow_html=True)
             st.download_button(
                 "매핑정의서 Excel",
                 data=st.session_state["export_excel_bytes"],
@@ -1853,6 +1874,7 @@ if page == "매핑 자동화":
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
+            st.markdown('</div>', unsafe_allow_html=True)
     with dl_cols[1]:
         if st.session_state["export_ddl"]:
             st.download_button(

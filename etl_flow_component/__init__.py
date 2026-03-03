@@ -4,11 +4,58 @@ React Flow 기반 인터랙티브 ETL 파이프라인 시각화
 """
 
 import os
+import subprocess
+import sys
 import streamlit.components.v1 as components
 
 _COMPONENT_NAME = "etl_flow_map"
 _FRONTEND_DIR   = os.path.join(os.path.dirname(__file__), "frontend", "build")
+_SRC_DIR        = os.path.join(os.path.dirname(__file__), "frontend", "src")
 _DEV_URL        = "http://localhost:3001"
+
+
+def _auto_build() -> None:
+    """
+    build/ 폴더가 없거나 src/ 소스 파일이 빌드보다 새로울 때 자동으로 빌드합니다.
+    - 최초 실행: npm install + npm run build 수행 (1~2분 소요)
+    - 이후 실행: build/ 가 최신이면 즉시 스킵
+    - src/ 수정 시: 다음 Streamlit 재시작 때 자동 재빌드
+    """
+    build_index = os.path.join(_FRONTEND_DIR, "index.html")
+
+    # 소스 파일 최신 수정 시간
+    src_mtime = 0.0
+    if os.path.isdir(_SRC_DIR):
+        for fname in os.listdir(_SRC_DIR):
+            fpath = os.path.join(_SRC_DIR, fname)
+            if os.path.isfile(fpath):
+                src_mtime = max(src_mtime, os.path.getmtime(fpath))
+
+    build_mtime = os.path.getmtime(build_index) if os.path.isfile(build_index) else 0.0
+
+    if build_mtime >= src_mtime and os.path.isdir(_FRONTEND_DIR):
+        return  # 빌드가 최신 → 스킵
+
+    frontend_dir = os.path.join(os.path.dirname(__file__), "frontend")
+    npm = "npm.cmd" if sys.platform == "win32" else "npm"
+
+    print("[ETL Flow Map] React 컴포넌트 빌드를 시작합니다...")
+
+    node_modules = os.path.join(frontend_dir, "node_modules")
+    if not os.path.isdir(node_modules):
+        print("[ETL Flow Map] npm install 실행 중...")
+        subprocess.run([npm, "install"], cwd=frontend_dir, check=True)
+
+    print("[ETL Flow Map] npm run build 실행 중...")
+    subprocess.run([npm, "run", "build"], cwd=frontend_dir, check=True)
+    print("[ETL Flow Map] 빌드 완료.")
+
+
+# Streamlit 앱 시작 시 자동 빌드 시도
+try:
+    _auto_build()
+except Exception as _build_err:
+    print(f"[ETL Flow Map] 자동 빌드 실패 (개발 서버로 fallback): {_build_err}")
 
 # 빌드된 파일이 있으면 production 모드, 없으면 개발 서버
 if os.path.isdir(_FRONTEND_DIR):
@@ -80,15 +127,32 @@ def build_flow_data_from_mappings(mappings: list[dict]) -> tuple[list[dict], lis
     node_map: dict[str, dict] = {}
     edges: list[dict] = []
 
+    # 스키마 접두사 → 레이어 매핑
+    _SCHEMA_LAYER: dict[str, str] = {
+        "ODS": "ods", "STG": "ods", "STAGING": "ods", "RAW": "ods",
+        "SOURCE": "ods", "SRC": "ods",
+        "DM": "dm", "MART": "dm", "MARTS": "dm",
+        "ANALYTICS": "dm", "REPORT": "dm", "BI": "dm",
+    }
+
     def _infer_layer(table_name: str) -> str:
         name = table_name.upper()
-        if name.startswith("ODS_") or name.startswith("STG_"):
+
+        # 스키마 포함 이름 처리 (예: "dw.dim_employee", "src.employee")
+        if "." in name:
+            schema, _, table = name.partition(".")
+            if schema in _SCHEMA_LAYER:
+                return _SCHEMA_LAYER[schema]
+            # DW 스키마는 테이블명으로 세분화
+            name = table
+
+        if name.startswith(("ODS_", "STG_")):
             return "ods"
-        if name.startswith("FACT_") or name.startswith("DW_FACT"):
+        if name.startswith(("FACT_", "DW_FACT")):
             return "fact"
-        if name.startswith("DIM_") or name.startswith("DW_DIM"):
+        if name.startswith(("DIM_", "DW_DIM")):
             return "dim"
-        if name.startswith("DM_") or name.startswith("MART_"):
+        if name.startswith(("DM_", "MART_")):
             return "dm"
         return "custom"
 

@@ -1,8 +1,8 @@
 #!/bin/bash
 
-input=$(cat)
+mode=$1
 
-feedback=$(echo "$input" | python .claude/agents/evaluator_agent.py post)
+feedback=$(python .claude/agent/evaluator_agent.py "$mode")
 
 if [[ "$feedback" != "ALLOW" ]]; then
   jq -n --arg msg "$feedback" '{

@@ -2,20 +2,22 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|Write|Edit|MultiEdit",
+        "matcher": "Write|Edit|MultiEdit",
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/pre_evaluator.sh"
+            "command": ".claude/hooks/evaluator.sh pre"
           }
         ]
-      },
+      }
+    ],
+    "PostToolUse": [
       {
         "matcher": "Write|Edit|MultiEdit",
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/post_evaluator.sh"
+            "command": ".claude/hooks/evaluator.sh post"
           }
         ]
       }

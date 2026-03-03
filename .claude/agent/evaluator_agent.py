@@ -5,7 +5,6 @@ mode = sys.argv[1]
 
 data = json.load(sys.stdin)
 
-tool = data.get("tool_name")
 file_path = data.get("tool_input", {}).get("file_path", "")
 
 # CLAUDE.md 강제 읽기
