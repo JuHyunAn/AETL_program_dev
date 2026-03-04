@@ -1866,7 +1866,6 @@ if page == "매핑 자동화":
     dl_cols = st.columns(4)
     with dl_cols[0]:
         if st.session_state["export_excel_bytes"]:
-            st.markdown('<div class="dl-primary">', unsafe_allow_html=True)
             st.download_button(
                 "매핑정의서 Excel",
                 data=st.session_state["export_excel_bytes"],
@@ -1874,7 +1873,6 @@ if page == "매핑 자동화":
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
-            st.markdown('</div>', unsafe_allow_html=True)
     with dl_cols[1]:
         if st.session_state["export_ddl"]:
             st.download_button(

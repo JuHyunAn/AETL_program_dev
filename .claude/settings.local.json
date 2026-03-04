@@ -14,7 +14,8 @@
       "WebFetch(domain:ai.google.dev)",
       "Bash(pip install:*)",
       "Bash(sort:*)",
-      "WebFetch(domain:www.kimballgroup.com)"
+      "WebFetch(domain:www.kimballgroup.com)",
+      "Bash(streamlit run:*)"
     ]
   }
 }

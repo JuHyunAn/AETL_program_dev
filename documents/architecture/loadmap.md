@@ -1,7 +1,7 @@
 # AETL v2 — 현재 구현 상태 및 로드맵
 
-> **Version**: 2.2
-> **Last Updated**: 2026-03-02
+> **Version**: 2.3
+> **Last Updated**: 2026-03-04
 > **핵심 철학**: "SQL을 생성하고, 실행하고, 결과물을 만들어낸다"
 > **설계 원칙**:
 > 1. Human-in-the-Loop — AI는 제안만, 실행은 사람이 결정
@@ -16,8 +16,7 @@
 AETL_program_dev/
 │
 ├── aetl_llm.py               # LLM 프로바이더 통합 초기화 (PDF 네이티브 분석 포함)
-├── aetl_agent.py              # LangGraph Tool-calling ETL 에이전트 (도구 6개)
-├── app.py                     # v1 SQL 챗봇 엔진 (레거시 — 폐기 예정)
+├── aetl_agent.py              # LangGraph Tool-calling ETL 에이전트 (도구 7개)
 │
 ├── db_schema.py               # DB 스키마 조회 (Oracle/MariaDB/PostgreSQL)
 ├── db_config.json             # DB 연결 설정
@@ -36,22 +35,36 @@ AETL_program_dev/
 ├── etl_sql_generator.py       # 검증 SQL 자동 생성 (규칙 기반 + LLM)
 ├── etl_metadata_parser.py     # Excel/CSV 테이블 정의서 파서
 │
-├── etl_streamlit_app.py       # 메인 웹 UI (Streamlit)
-├── streamlit_app.py           # 기본 UI (레거시 — 폐기 예정)
+├── etl_streamlit_app.py       # 메인 웹 UI (Streamlit, 7개 페이지)
+├── streamlit_app.py           # v1 기본 UI (레거시 — 폐기 예정)
 │
-├── etl_flow_component/        # ETL Flow Map 커스텀 컴포넌트
+├── etl_flow_component/        # ETL Flow Map 커스텀 컴포넌트 (ETL Lineage 페이지)
 │   ├── __init__.py            # Streamlit 컴포넌트 선언
-│   └── frontend/              # React + XY Flow + Vite 프론트엔드
+│   └── frontend/              # React + @xyflow/react + Vite 프론트엔드
 │       ├── src/               # TypeScript 소스코드
 │       └── build/             # 프로덕션 빌드 (npm run build 필요)
+│
+├── erd_flow_component/        # ERD Flow Map 커스텀 컴포넌트 (DW 설계 페이지)
+│   ├── __init__.py            # Streamlit 컴포넌트 선언
+│   └── frontend/              # React + @xyflow/react + Vite 프론트엔드
+│       ├── src/               # TypeScript 소스코드
+│       └── build/             # 프로덕션 빌드 (npm run build 필요)
+│
+├── .claude/
+│   └── agent/
+│       └── evaluator_agent.py # Claude Code 평가 에이전트 (pre/post-tool hook)
 │
 ├── .env                       # 환경변수 (API 키, DB 비밀번호)
 ├── .aetl_metadata.db          # 메타데이터 SQLite (자동 생성)
 ├── aetl_metadata.db           # 검증 규칙/이력 SQLite (자동 생성)
 ├── CLAUDE.md                  # 프로젝트 가이드
 └── documents/                 # 설계 문서
-    ├── loadmap.md             # 현재 파일
-    └── 개선사항.md             # 개선 이력
+    └── architecture/
+        ├── loadmap.md             # 현재 파일
+        ├── AETL_Analysis_Presentation.md  # 발표 자료 초안
+        ├── schema_doc.md          # Star Schema 설계 참고 문서
+        ├── db_conn_template.txt   # DB 연결 설정 템플릿
+        └── loadmap.jsx            # 로드맵 시각화 React 컴포넌트
 ```
 
 ---
@@ -98,7 +111,7 @@ AETL_program_dev/
 | 검증 실행 | DB 전용 | SQL 분류 + 실행 + AI 오류 진단 | aetl_executor |
 | 매핑 자동화 | 공통 | 매핑 편집 → Excel/DDL/MERGE/리포트 산출물 | aetl_export, aetl_template_profile |
 | ETL Lineage | 공통 | 등록된 매핑 → React Flow 시각화 | etl_flow_component |
-| DW 설계 | 공통 | Swagger/PDF/텍스트 → Star Schema 설계 | aetl_designer |
+| DW 설계 | 공통 | Swagger/PDF/텍스트 → Star Schema 설계 + ERD 시각화 | aetl_designer, erd_flow_component |
 
 ### 2.3 데이터 소스 전환
 
@@ -116,9 +129,9 @@ AETL_program_dev/
 
 ```
 지원 프로바이더:
-  - gemini  : Google Gemini 2.5 Flash  (GOOGLE_API_KEY)
-  - claude  : Anthropic Claude Sonnet  (ANTHROPIC_API_KEY)
-  - openai  : OpenAI GPT-4o-mini       (OPENAI_API_KEY)
+  - gemini  : Google Gemini 2.5 Flash       (GOOGLE_API_KEY)
+  - claude  : Anthropic Claude Sonnet 4.5   (ANTHROPIC_API_KEY)
+  - openai  : OpenAI GPT-4o-mini            (OPENAI_API_KEY)
 
 LLM_PROVIDER 환경변수 동작:
   - 명시 지정 시: 해당 프로바이더 우선, 나머지 fallback
@@ -148,7 +161,7 @@ LLM_PROVIDER 환경변수 동작:
   사용자 메시지 → [Agent Node] → LLM Tool-calling → [Tool Execute Node] → 반복 → 응답
 ```
 
-**등록된 도구 (6개)**:
+**등록된 도구 (7개)**:
 
 | 도구 | 설명 | 데이터 소스 |
 |------|------|-------------|
@@ -162,18 +175,7 @@ LLM_PROVIDER 환경변수 동작:
 
 ---
 
-### 3.3 app.py — v1 SQL 챗봇 엔진
-
-**상태**: 레거시 (폐기 예정)
-
-- 자연어 → Oracle SQL 변환 전용 LangGraph 파이프라인
-- 하드코딩된 `ChatGoogleGenerativeAI` 사용 (`aetl_llm.py` 미연동)
-- `streamlit_app.py`와 짝으로 동작
-- aetl_agent.py가 상위 호환이므로 단계적 폐기 권장
-
----
-
-### 3.4 db_schema.py — DB 스키마 조회 모듈
+### 3.3 db_schema.py — DB 스키마 조회 모듈
 
 **상태**: 구현 완료 (Oracle / MariaDB / PostgreSQL)
 
@@ -199,7 +201,7 @@ LLM_PROVIDER 환경변수 동작:
 
 ---
 
-### 3.5 aetl_metadata_engine.py — 메타데이터 사전 수집 엔진
+### 3.4 aetl_metadata_engine.py — 메타데이터 사전 수집 엔진
 
 **상태**: 구현 완료
 
@@ -222,7 +224,7 @@ SQLite 테이블 (.aetl_metadata.db):
 
 ---
 
-### 3.6 aetl_store.py — 검증 규칙/실행 이력 저장소
+### 3.5 aetl_store.py — 검증 규칙/실행 이력 저장소
 
 **상태**: 구현 완료
 
@@ -237,7 +239,7 @@ SQLite 테이블 (aetl_metadata.db):
 
 ---
 
-### 3.7 aetl_profiler.py — 데이터 프로파일링 엔진
+### 3.6 aetl_profiler.py — 데이터 프로파일링 엔진
 
 **상태**: 구현 완료 (Oracle / MariaDB / PostgreSQL)
 
@@ -252,7 +254,7 @@ SQLite 테이블 (aetl_metadata.db):
 
 ---
 
-### 3.8 aetl_executor.py — SQL 실행 엔진
+### 3.7 aetl_executor.py — SQL 실행 엔진
 
 **상태**: 구현 완료
 
@@ -272,7 +274,7 @@ SQL 분류 (sqlglot AST 기반):
 
 ---
 
-### 3.9 aetl_designer.py — DW Star Schema 설계 엔진
+### 3.8 aetl_designer.py — DW Star Schema 설계 엔진
 
 **상태**: 구현 완료
 
@@ -286,11 +288,12 @@ SQL 분류 (sqlglot AST 기반):
   - Star Schema 설계 JSON (ODS/FACT/DIM/DM 테이블)
   - Mermaid erDiagram / flowchart 코드
   - DDL Script (Oracle/MariaDB/PostgreSQL)
+  - erd_flow_component를 통한 인터랙티브 ERD 시각화
 ```
 
 ---
 
-### 3.10 aetl_lineage.py — SQL 리니지 추적 엔진
+### 3.9 aetl_lineage.py — SQL 리니지 추적 엔진
 
 **상태**: 구현 완료
 
@@ -307,7 +310,7 @@ SQL 분류 (sqlglot AST 기반):
 
 ---
 
-### 3.11 aetl_export.py — 산출물 자동 생성 엔진
+### 3.10 aetl_export.py — 산출물 자동 생성 엔진
 
 **상태**: 구현 완료
 
@@ -323,7 +326,7 @@ SQL 분류 (sqlglot AST 기반):
 
 ---
 
-### 3.12 etl_sql_generator.py — 검증 SQL 자동 생성
+### 3.11 etl_sql_generator.py — 검증 SQL 자동 생성
 
 **상태**: 구현 완료
 
@@ -344,7 +347,7 @@ SQL 분류 (sqlglot AST 기반):
 
 ---
 
-### 3.13 etl_metadata_parser.py — Excel/CSV 메타데이터 파서
+### 3.12 etl_metadata_parser.py — Excel/CSV 메타데이터 파서
 
 **상태**: 구현 완료
 
@@ -361,7 +364,7 @@ SQL 분류 (sqlglot AST 기반):
 
 ---
 
-### 3.14 aetl_template_profile.py — 사용자 정의 엑셀 양식 프로파일
+### 3.13 aetl_template_profile.py — 사용자 정의 엑셀 양식 프로파일
 
 **상태**: 구현 완료
 
@@ -378,7 +381,7 @@ SQL 분류 (sqlglot AST 기반):
 
 ---
 
-### 3.15 etl_flow_component — ETL Flow Map 커스텀 컴포넌트
+### 3.14 etl_flow_component — ETL Flow Map 커스텀 컴포넌트
 
 **상태**: 구현 완료 (프론트엔드 빌드 필요)
 
@@ -393,7 +396,23 @@ SQL 분류 (sqlglot AST 기반):
   - 줌/팬/드래그 지원
 ```
 
-> **빌드 시점**: `etl_flow_component/frontend/src/` 수정 시에만 `npm run build` 필요.
+---
+
+### 3.15 erd_flow_component — ERD Flow Map 커스텀 컴포넌트
+
+**상태**: 구현 완료 (프론트엔드 빌드 필요)
+
+```
+기술 스택: React + @xyflow/react + Vite
+빌드: cd erd_flow_component/frontend && npm install && npm run build
+
+기능:
+  - DW 설계 페이지에서 Star Schema ERD를 인터랙티브 그래프로 시각화
+  - ODS / FACT / DIM / DM 레이어별 색상 구분
+  - 테이블 노드 클릭 시 컬럼 상세 표시
+```
+
+> **빌드 시점**: `frontend/src/` 수정 시에만 `npm run build` 필요.
 > Python 파일 변경은 Streamlit 자동 반영.
 
 ---
@@ -403,55 +422,60 @@ SQL 분류 (sqlglot AST 기반):
 ### 4.1 엔진 간 연동 흐름
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                     AETL v2 통합 아키텍처                       │
-│                                                                │
-│   ┌─────────────────────────────────────────────────────────┐ │
-│   │                     사용자 인터페이스                       │ │
-│   │         etl_streamlit_app.py (7개 페이지)                  │ │
-│   └────────────────────────────┬──────────────────────────────┘ │
-│                                │                                │
-│   ┌────────────────────────────▼──────────────────────────────┐ │
-│   │                 LLM 프로바이더 (aetl_llm.py)                │ │
-│   │     Gemini / Claude / OpenAI  (fallback 체인 + PDF 분석)    │ │
-│   └────────────────────────────┬──────────────────────────────┘ │
-│                                │                                │
-│   ┌────────────────────────────▼──────────────────────────────┐ │
-│   │               에이전트 / 엔진 레이어                        │ │
-│   │                                                            │ │
-│   │  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐  │ │
-│   │  │ aetl_agent   │   │ aetl_executor│   │ aetl_designer│  │ │
-│   │  │ (Tool-call   │   │ (SQL 실행    │   │ (DW 설계     │  │ │
-│   │  │  Agent 6도구) │   │  + AI 진단)  │   │  + PDF 분석) │  │ │
-│   │  └──────┬───────┘   └──────────────┘   └──────────────┘  │ │
-│   │         │                                                  │ │
-│   │  ┌──────▼───────┐   ┌──────────────┐   ┌──────────────┐  │ │
-│   │  │ aetl_lineage │   │ aetl_export  │   │ aetl_template│  │ │
-│   │  │ (리니지 추적)│   │ (산출물 생성)│   │ (양식 프로파일)│  │ │
-│   │  └──────────────┘   └──────────────┘   └──────────────┘  │ │
-│   │                                                            │ │
-│   │  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐  │ │
-│   │  │ aetl_profiler│   │etl_sql_gen   │   │etl_meta_     │  │ │
-│   │  │ (프로파일링) │   │(검증SQL 생성)│   │parser        │  │ │
-│   │  └──────────────┘   └──────────────┘   └──────────────┘  │ │
-│   └────────────────────────────┬──────────────────────────────┘ │
-│                                │                                │
-│   ┌────────────────────────────▼──────────────────────────────┐ │
-│   │                  데이터 레이어                               │ │
-│   │                                                            │ │
-│   │  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐  │ │
-│   │  │ db_schema.py │   │ aetl_meta_   │   │ aetl_store   │  │ │
-│   │  │ (스키마 조회  │   │ engine.py    │   │ (검증 규칙   │  │ │
-│   │  │  + 캐시)     │   │ (메타데이터  │   │  + 이력)     │  │ │
-│   │  │              │   │  SQLite 캐시) │   │              │  │ │
-│   │  └──────┬───────┘   └──────────────┘   └──────────────┘  │ │
-│   └─────────┼──────────────────────────────────────────────────┘ │
-│             │                                                    │
-│   ┌─────────▼────────────────────────────────────────────────┐   │
-│   │                    DB 드라이버 레이어                       │   │
-│   │         Oracle (oracledb) │ MariaDB │ PostgreSQL (psycopg2) │   │
-│   └──────────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                        AETL v2 통합 아키텍처                              │
+│                                                                          │
+│   ┌───────────────────────────────────────────────────────────────────┐  │
+│   │                     사용자 인터페이스                              │  │
+│   │         etl_streamlit_app.py (7개 페이지)                         │  │
+│   └────────────────────────┬──────────────────────────────────────────┘  │
+│                            │                                             │
+│   ┌────────────────────────▼──────────────────────────────────────────┐  │
+│   │                 LLM 프로바이더 (aetl_llm.py)                       │  │
+│   │     Gemini / Claude / OpenAI  (fallback 체인 + PDF 분석)           │  │
+│   └────────────────────────┬──────────────────────────────────────────┘  │
+│                            │                                             │
+│   ┌────────────────────────▼──────────────────────────────────────────┐  │
+│   │               에이전트 / 엔진 레이어                               │  │
+│   │                                                                   │  │
+│   │  ┌──────────────┐   ┌──────────────┐   ┌──────────────────────┐  │  │
+│   │  │ aetl_agent   │   │ aetl_executor│   │    aetl_designer     │  │  │
+│   │  │ (Tool-call   │   │ (SQL 실행    │   │ (DW 설계 + PDF 분석  │  │  │
+│   │  │  Agent 7도구) │   │  + AI 진단)  │   │  + erd_flow_comp)   │  │  │
+│   │  └──────┬───────┘   └──────────────┘   └──────────────────────┘  │  │
+│   │         │                                                         │  │
+│   │  ┌──────▼───────┐   ┌──────────────┐   ┌──────────────────────┐  │  │
+│   │  │ aetl_lineage │   │ aetl_export  │   │   aetl_template      │  │  │
+│   │  │ (리니지 추적)│   │ (산출물 생성)│   │   (양식 프로파일)    │  │  │
+│   │  └──────────────┘   └──────────────┘   └──────────────────────┘  │  │
+│   │                                                                   │  │
+│   │  ┌──────────────┐   ┌──────────────┐   ┌──────────────────────┐  │  │
+│   │  │ aetl_profiler│   │etl_sql_gen   │   │  etl_metadata_parser │  │  │
+│   │  │ (프로파일링) │   │(검증SQL 생성)│   │  (Excel/CSV 파서)    │  │  │
+│   │  └──────────────┘   └──────────────┘   └──────────────────────┘  │  │
+│   │                                                                   │  │
+│   │  ┌──────────────────────────────────┐                            │  │
+│   │  │ etl_flow_component (ETL Lineage) │                            │  │
+│   │  │ erd_flow_component (DW 설계 ERD) │                            │  │
+│   │  └──────────────────────────────────┘                            │  │
+│   └────────────────────────┬──────────────────────────────────────────┘  │
+│                            │                                             │
+│   ┌────────────────────────▼──────────────────────────────────────────┐  │
+│   │                  데이터 레이어                                     │  │
+│   │                                                                   │  │
+│   │  ┌──────────────┐   ┌──────────────────────┐   ┌──────────────┐  │  │
+│   │  │ db_schema.py │   │ aetl_metadata_engine  │   │ aetl_store   │  │  │
+│   │  │ (스키마 조회  │   │ (.aetl_metadata.db    │   │(aetl_meta-   │  │  │
+│   │  │  + 캐시)     │   │  스키마+프로파일 캐시) │   │ data.db      │  │  │
+│   │  │              │   │                      │   │ 규칙+이력)   │  │  │
+│   │  └──────┬───────┘   └──────────────────────┘   └──────────────┘  │  │
+│   └─────────┼─────────────────────────────────────────────────────────┘  │
+│             │                                                            │
+│   ┌─────────▼──────────────────────────────────────────────────────┐     │
+│   │                    DB 드라이버 레이어                            │     │
+│   │    Oracle (oracledb) │ MariaDB (mariadb) │ PostgreSQL (psycopg2) │     │
+│   └─────────────────────────────────────────────────────────────────┘     │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -460,12 +484,12 @@ SQL 분류 (sqlglot AST 기반):
 
 | 구분 | 기술 | 용도 |
 |------|------|------|
-| **LLM** | Gemini 2.5 Flash / Claude Sonnet / GPT-4o-mini | 자연어 처리, SQL 생성, 진단, PDF 분석 |
+| **LLM** | Gemini 2.5 Flash / Claude Sonnet 4.5 / GPT-4o-mini | 자연어 처리, SQL 생성, 진단, PDF 분석 |
 | **에이전트** | LangChain + LangGraph | Tool-calling 에이전트 파이프라인 |
 | **SQL 파서** | sqlglot | SQL 분류, 리니지 추출, 안전 검사 |
 | **그래프** | NetworkX | 리니지 DAG, 영향도 분석 |
 | **UI** | Streamlit | 웹 대시보드 (7개 페이지) |
-| **Flow 시각화** | React + @xyflow/react + dagre | ETL Flow Map 인터랙티브 컴포넌트 |
+| **Flow 시각화** | React + @xyflow/react + dagre | ETL Flow Map / ERD Flow Map |
 | **DB 드라이버** | oracledb / mariadb / psycopg2 | 멀티 DB 연결 |
 | **엑셀** | openpyxl / pandas | 매핑정의서, 검증 리포트, 템플릿 |
 | **저장소** | SQLite | 메타데이터, 검증 규칙/이력 영속 저장 |
@@ -474,6 +498,14 @@ SQL 분류 (sqlglot AST 기반):
 ---
 
 ## 6. 구현 완료 / 변경 이력
+
+### v2.3 변경 사항 (2026-03-04)
+
+| 항목 | 모듈 | 변경 내용 |
+|------|------|----------|
+| 다운로드 버튼 스타일 통일 | etl_streamlit_app.py | 매핑정의서 Excel 버튼에서 dl-primary 래퍼 제거 |
+| loadmap 최신화 | documents/architecture/loadmap.md | erd_flow_component 추가, app.py 삭제 반영, 도구 수 정정 |
+| CLAUDE.md 정리 | CLAUDE.md | 보안 정보 제거, 내용 최신화 |
 
 ### v2.2 변경 사항 (2026-03-02)
 
@@ -484,6 +516,7 @@ SQL 분류 (sqlglot AST 기반):
 | PDF 네이티브 분석 | aetl_llm.py, aetl_designer.py | Claude/Gemini로 PDF 직접 분석 (텍스트 추출 대신) |
 | 데이터 소스 전환 초기화 | etl_streamlit_app.py | 모드 변경 시 전체 세션 상태 리셋 |
 | 테이블 역할 관리 제거 | etl_streamlit_app.py, aetl_agent.py | UI expander + get_tables_by_role 도구 제거 |
+| app.py 삭제 | — | v1 레거시 SQL 챗봇 엔진 완전 제거 |
 
 ### v2.1 구현 완료 항목 (2026-02-28)
 
@@ -502,7 +535,7 @@ SQL 분류 (sqlglot AST 기반):
 |------|------|
 | LLM 프로바이더 통합 (Gemini/Claude/OpenAI) | aetl_llm.py |
 | PDF 네이티브 분석 (Claude/Gemini) | aetl_llm.py |
-| LangGraph Tool-calling 에이전트 (6도구) | aetl_agent.py |
+| LangGraph Tool-calling 에이전트 (7도구) | aetl_agent.py |
 | Oracle / MariaDB / PostgreSQL 스키마 조회 | db_schema.py |
 | PostgreSQL 다중 스키마 + LIKE 패턴 지원 | db_schema.py |
 | 스키마 캐싱 + 옵션 변경 자동 무효화 | db_schema.py |
@@ -518,6 +551,7 @@ SQL 분류 (sqlglot AST 기반):
 | SQL 리니지 추적 (sqlglot + NetworkX) | aetl_lineage.py |
 | Mermaid 리니지 시각화 (컬럼/테이블 레벨) | aetl_lineage.py |
 | ETL Flow Map (React + XY Flow) | etl_flow_component |
+| ERD Flow Map (React + XY Flow, DW 설계용) | erd_flow_component |
 | 매핑정의서 Excel 자동 생성 (6시트) | aetl_export.py |
 | DDL 생성 (Oracle/MariaDB/PostgreSQL) | aetl_export.py |
 | MERGE/UPSERT SQL 생성 (3 DB) | aetl_export.py |
@@ -529,6 +563,7 @@ SQL 분류 (sqlglot AST 기반):
 | Excel/CSV 메타데이터 파서 (한글/영문) | etl_metadata_parser.py |
 | 사용자 정의 엑셀 양식 프로파일 | aetl_template_profile.py |
 | 데이터 소스 전환 시 전체 상태 초기화 | etl_streamlit_app.py |
+| v1 레거시 코드 제거 (app.py 삭제) | — |
 
 ---
 
@@ -545,11 +580,11 @@ SQL 분류 (sqlglot AST 기반):
 
 ### 7.2 재고가 필요한 부분
 
-#### (1) 레거시 코드 정리 — `app.py` / `streamlit_app.py`
+#### (1) 레거시 코드 정리 — `streamlit_app.py`
 
-- `app.py`는 하드코딩된 Gemini + 독립 파이프라인으로, `aetl_agent.py`와 완전히 중복
-- `streamlit_app.py`도 `etl_streamlit_app.py`로 대체됨
-- **제안**: 두 파일 모두 삭제 또는 `_legacy/` 폴더로 이동
+- `app.py`는 v2.2에서 삭제 완료
+- `streamlit_app.py`는 아직 존재하나 `etl_streamlit_app.py`로 완전히 대체됨
+- **제안**: `streamlit_app.py` 삭제 또는 `_legacy/` 폴더로 이동
 
 #### (2) SQLite 이중 저장소 — `aetl_metadata_engine.py` vs `aetl_store.py`
 
@@ -582,16 +617,25 @@ SQL 분류 (sqlglot AST 기반):
 - "파일 업로드" 모드에서는 프로파일링 불가 (DB 직접 연결 필요)
 - **판단**: 프로파일링은 실제 DB 데이터가 있어야 의미 있으므로 현재 제한 합리적
 
+#### (7) ODS→DW→DM 파이프라인 실행 부재
+
+- ODS/DW/DM은 설계·시각화·레이어 라벨에만 사용됨. 여러 매핑을 **순서대로 실행**하는 파이프라인/잡 개념 없음.
+- **제안**: [ods_dw_dm_strategy.md](./ods_dw_dm_strategy.md) 참조 — 파이프라인 정의 → 순차 실행 → 이력 저장 단계별 도입.
+
 ---
 
 ## 8. 로드맵 (향후 계획)
 
-### Phase 1: 안정화 및 정리 (현재)
+> **ODS → DW → DM 상용 ETL 수준 전략**은 별도 문서 [ods_dw_dm_strategy.md](./ods_dw_dm_strategy.md) 참조.  
+> 파이프라인 정의·순차 실행·이력 저장을 단계별로 도입하는 현실적 계획이 정리되어 있음.
+
+### Phase 1: 안정화 및 정리 ✅ 완료
 
 - [x] LLM 프로바이더 통합 + PDF 네이티브 분석
 - [x] PostgreSQL 다중 스키마 + 캐시 무효화
 - [x] 데이터 소스 전환 시 전체 초기화
-- [ ] app.py / streamlit_app.py 레거시 정리
+- [x] app.py 레거시 삭제
+- [ ] streamlit_app.py 레거시 삭제
 - [ ] SQLite 이중 저장소 통합 검토
 - [ ] 전체 모듈 통합 테스트
 
@@ -601,6 +645,8 @@ SQL 분류 (sqlglot AST 기반):
 - [ ] ETL Lineage 페이지에 SQL 리니지 분석 탭 추가
 - [ ] 검증 결과 대시보드 (Pass/Fail 추이)
 - [ ] DW 설계 → 매핑 자동화 연계 (선택)
+- [ ] **ODS→DW→DM 파이프라인 정의** (스텝 = 매핑 참조, 순서 저장) — [ods_dw_dm_strategy.md](./ods_dw_dm_strategy.md) Phase A
+- [ ] **파이프라인 순차 실행** (DML 승인 후 스텝별 실행 + 실행 이력) — 동일 문서 Phase B
 
 ### Phase 3: 운영 기능
 
@@ -656,11 +702,11 @@ SQL 분류 (sqlglot AST 기반):
          → ODS/FACT/DIM/DM 테이블 설계
 
 [Step 3] 시각화 확인
-         → Mermaid ERD + 레이어 흐름도
+         → Mermaid ERD + 레이어 흐름도 + erd_flow_component 인터랙티브 ERD
 
 [Step 4] DDL 생성 → 다운로드
 ```
 
 ---
 
-*AETL v2.2 — 생성(Generate)하고, 실행(Execute)하고, 산출물(Deliver)까지*
+*AETL v2.3 — 생성(Generate)하고, 실행(Execute)하고, 산출물(Deliver)까지*
