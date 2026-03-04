@@ -682,7 +682,7 @@ hr { border-color: #E2E8F0 !important; }
 # ─────────────────────────────────────────
 # Session state
 # ─────────────────────────────────────────
-for key in ("source_meta", "target_meta", "mapping", "queries"):
+for key in ("source_meta", "target_meta", "mapping", "queries", "query_exec_results"):
     if key not in st.session_state:
         st.session_state[key] = None
 # Agent / Profile 상태
@@ -1167,6 +1167,7 @@ def render_metadata_table(meta: dict, kind: str):
 
 
 def render_query_results(queries: dict):
+    import pandas as pd
     from etl_sql_generator import QUERY_LABELS
 
     st.markdown('<div class="step-row"><span class="step-num">3</span><span class="step-text">생성된 검증 쿼리</span></div>', unsafe_allow_html=True)
@@ -1183,7 +1184,7 @@ def render_query_results(queries: dict):
         f"-- ════ {QUERY_LABELS.get(k,'?')} ════\n{v['sql']}"
         for k, v in queries.items()
     )
-    col1, col2, _ = st.columns([2, 2, 3])
+    col1, col2, col3, _ = st.columns([1, 1, 1, 3])
     with col1:
         st.download_button(
             "SQL 다운로드 (.sql)", data=full_sql,
@@ -1196,6 +1197,66 @@ def render_query_results(queries: dict):
             file_name="etl_validation_queries.json", mime="application/json",
             width='stretch',
         )
+    with col3:
+        db_connected = st.session_state.get("db_conn_config", {}).get("connected", False)
+        run_all_btn = st.button(
+            "전체 실행",
+            type="primary",
+            width='stretch',
+            disabled=not db_connected,
+            help="DB가 연결된 경우에만 실행 가능합니다." if not db_connected else "생성된 검증 쿼리를 모두 실행합니다.",
+        )
+
+
+    if run_all_btn:
+        from aetl_executor import execute_query
+        results = {}
+        progress = st.progress(0, text="검증 쿼리 실행 중...")
+        items = list(queries.items())
+        for i, (key, info) in enumerate(items):
+            label = QUERY_LABELS.get(key, key)
+            progress.progress((i + 1) / len(items), text=f"실행 중: {label}")
+            results[key] = execute_query(info.get("sql", ""), row_limit=500)
+        progress.empty()
+        st.session_state["query_exec_results"] = results
+        st.success("전체 쿼리 실행 완료")
+
+    # ── 실행 결과 표시 ──
+    exec_results = st.session_state.get("query_exec_results")
+    if exec_results:
+        st.markdown('<div class="step-row"><span class="step-num">4</span><span class="step-text">검증 실행 결과</span></div>', unsafe_allow_html=True)
+
+        pass_count = sum(1 for r in exec_results.values() if r.get("ok"))
+        fail_count = len(exec_results) - pass_count
+        col_m1, col_m2, col_m3 = st.columns(3)
+        col_m1.metric("전체 쿼리", f"{len(exec_results)}건")
+        col_m2.metric("성공", f"{pass_count}건")
+        col_m3.metric("실패", f"{fail_count}건")
+
+        st.divider()
+        for key, result in exec_results.items():
+            label = QUERY_LABELS.get(key, key)
+            ok = result.get("ok", False)
+            status_badge = (
+                '<span style="background:#16A34A;color:#fff;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:700;">PASS</span>'
+                if ok else
+                '<span style="background:#DC2626;color:#fff;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:700;">FAIL</span>'
+            )
+            expander_label = f"{'✅' if ok else '❌'}  {label}"
+            with st.expander(expander_label, expanded=not ok):
+                st.markdown(status_badge, unsafe_allow_html=True)
+                if ok:
+                    col_r1, col_r2 = st.columns(2)
+                    col_r1.metric("결과 건수", f"{result['row_count']:,}건")
+                    col_r2.metric("소요 시간", f"{result['elapsed_sec']}초")
+                    if result.get("columns") and result.get("rows"):
+                        df = pd.DataFrame(result["rows"], columns=result["columns"])
+                        st.dataframe(df, width='stretch', height=min(300, 36 * len(df) + 42), hide_index=True)
+                    else:
+                        st.info("결과 없음 (0건)")
+                else:
+                    st.error(f"오류: {result.get('error', '알 수 없는 오류')}")
+                    st.code(queries[key].get("sql", ""), language="sql")
 
 
 # ─────────────────────────────────────────
@@ -2809,7 +2870,7 @@ if st.session_state.source_meta or st.session_state.target_meta:
         )
     with col_reset:
         if st.button("초기화", width='stretch'):
-            for k in ("source_meta", "target_meta", "mapping", "queries"):
+            for k in ("source_meta", "target_meta", "mapping", "queries", "query_exec_results"):
                 st.session_state[k] = None
             st.rerun()
 
@@ -2835,6 +2896,7 @@ if st.session_state.source_meta or st.session_state.target_meta:
                     )
                     st.success("템플릿 기반 검증 쿼리 생성 완료")
                 st.session_state.queries = queries
+                st.session_state["query_exec_results"] = None
             except Exception as e:
                 st.error(f"쿼리 생성 오류: {e}")
                 st.code(traceback.format_exc())

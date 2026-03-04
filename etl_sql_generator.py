@@ -90,6 +90,16 @@ PK: {target_pk}
 5. PK가 없으면 모든 컬럼을 비교 대상으로 사용
 6. 체크섬(해시) 생성 시 반드시 컬럼 사이에 '|' 구분자를 삽입하여 해시 충돌을 방지하세요.
 7. UNION ALL 내부 각 분기에 행 제한이 필요한 경우, 반드시 서브쿼리로 감싸세요.
+8. [full_diff_check 필수 규칙]
+   - PK가 있으면 반드시 JOIN 방식을 사용하세요. EXCEPT/MINUS 사용 금지.
+     JOIN은 어떤 컬럼이 다른지 WHERE 조건으로 명확히 드러냅니다.
+     구조 예시:
+       SELECT S.pk_col, 'MISMATCH' AS STATUS
+       FROM source_table S JOIN target_table T ON S.pk_col = T.pk_col
+       WHERE (S.col1 <> T.col1 OR (S.col1 IS NULL) <> (T.col1 IS NULL))
+          OR (S.col2 <> T.col2 OR (S.col2 IS NULL) <> (T.col2 IS NULL))
+       [행 제한 절]
+   - PK가 없는 경우에만 EXCEPT 방식 허용
 
 ## 출력 형식 (반드시 JSON만 출력, 마크다운 코드블록 없이)
 {{
@@ -114,7 +124,7 @@ PK: {target_pk}
     "sql": "..."
   }},
   "full_diff_check": {{
-    "description": "소스/타겟 데이터 불일치 확인",
+    "description": "소스/타겟 데이터 불일치 확인 (전체 컬럼 비교)",
     "sql": "..."
   }}
 }}"""
@@ -288,32 +298,48 @@ def _post_validate_sql(queries: dict, db_type: str) -> dict:
 
 
 def _wrap_limit_in_union(sql: str) -> str:
-    """UNION ALL 중간의 각 분기에 bare LIMIT이 있으면 서브쿼리로 래핑"""
-    # UNION ALL이 없으면 그대로 반환
-    if not re.search(r'\bUNION\s+ALL\b', sql, re.IGNORECASE):
+    """
+    PostgreSQL: UNION/UNION ALL 분기 내부에 LIMIT가 있으면
+    전체를 CTE로 감싸고 LIMIT를 바깥으로 이동.
+
+    잘못된 예:
+        SELECT ... LIMIT 10
+        UNION ALL
+        SELECT ... LIMIT 10
+    올바른 변환 결과:
+        WITH _cte AS (
+            SELECT ...
+            UNION ALL
+            SELECT ...
+        )
+        SELECT * FROM _cte LIMIT 10;
+    """
+    if not re.search(r'\bUNION\b', sql, re.IGNORECASE):
         return sql
 
-    parts = re.split(r'(\bUNION\s+ALL\b)', sql, flags=re.IGNORECASE)
-    result = []
-    for part in parts:
-        stripped = part.strip()
-        # UNION ALL 키워드 자체는 그대로 유지
-        if re.match(r'\bUNION\s+ALL\b', stripped, re.IGNORECASE):
-            result.append(part)
-        # SELECT 분기에 LIMIT이 있으면 서브쿼리로 래핑
-        elif re.search(r'\bLIMIT\s+\d+', stripped, re.IGNORECASE) and \
-             re.match(r'\s*SELECT\b', stripped, re.IGNORECASE) and \
-             not stripped.lstrip().startswith('('):
-            # 끝의 세미콜론 분리
-            clean = stripped.rstrip(';').strip()
-            had_semi = stripped.rstrip().endswith(';')
-            wrapped = f"SELECT * FROM ({clean}) _sub"
-            if had_semi:
-                wrapped += ';'
-            result.append(wrapped)
-        else:
-            result.append(part)
-    return '\n'.join(result)
+    sql_body = sql.rstrip(';').strip()
+    had_semi = sql.rstrip().endswith(';')
+
+    # 마지막 UNION 키워드 위치를 찾아, 그 앞에 LIMIT가 있으면 분기 내 LIMIT 존재
+    union_positions = [m.start() for m in re.finditer(r'\bUNION\b', sql_body, re.IGNORECASE)]
+    if not union_positions:
+        return sql
+
+    before_last_union = sql_body[:union_positions[-1]]
+    if not re.search(r'\bLIMIT\s+\d+', before_last_union, re.IGNORECASE):
+        # 분기 내 LIMIT 없음 — 이미 올바른 형태
+        return sql
+
+    # 대표 LIMIT 값 추출 (첫 번째 LIMIT 기준)
+    limit_match = re.search(r'\bLIMIT\s+(\d+)', sql_body, re.IGNORECASE)
+    limit_val = limit_match.group(1) if limit_match else "100"
+
+    # 모든 LIMIT N 제거 후 CTE로 래핑
+    cleaned = re.sub(r'\s*\bLIMIT\s+\d+\b', '', sql_body, flags=re.IGNORECASE).strip()
+    result = f"WITH _cte AS (\n{cleaned}\n)\nSELECT * FROM _cte\nLIMIT {limit_val}"
+    if had_semi:
+        result += ';'
+    return result
 
 
 # ─────────────────────────────────────────

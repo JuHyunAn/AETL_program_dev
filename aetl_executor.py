@@ -34,7 +34,7 @@ def classify_sql(sql: str, db_type: str = "oracle") -> str:
     dialect = _DIALECT_MAP.get(db_type, "ansi")
     try:
         parsed = sqlglot.parse_one(sql.strip(), dialect=dialect)
-        if isinstance(parsed, exp.Select):
+        if isinstance(parsed, (exp.Select, exp.Union, exp.Intersect, exp.Except)):
             return "SELECT"
         elif isinstance(parsed, (exp.Insert, exp.Update, exp.Delete, exp.Merge)):
             return "DML"
