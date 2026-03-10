@@ -68,6 +68,33 @@ AETL_program_dev/
 
 ---
 
+## 폴더/파일 경로로 역할 파악
+
+- **실제 프로젝트 루트 경로(현재 개발 환경)**: `C:\Users\안주현\Desktop\AETL_program_dev`  
+  - 아래 경로는 모두 이 루트 기준 상대 경로입니다.
+
+다른 Agent 세션이나 신규 참여자가 **폴더·파일 경로만 보고** 모듈 역할을 파악할 수 있도록 경로별 역할을 정리합니다.
+
+| 경로 (폴더/파일) | 역할 |
+|------------------|------|
+| `etl_streamlit_app.py` | 메인 웹 진입점. Streamlit 7페이지(검증/프로파일/라인리지/DW설계/산출물 등) |
+| `aetl_*.py` | AETL 코어: `aetl_llm` LLM연동, `aetl_agent` 에이전트, `aetl_executor` SQL실행, `aetl_store` 저장, `aetl_profiler` 프로파일링, `aetl_export` 산출물, `aetl_designer` DW설계, `aetl_lineage` 리니지, `aetl_metadata_engine` 메타수집, `aetl_template_profile` 엑셀 프로파일 |
+| `etl_*.py` | ETL 보조: `etl_sql_generator` 검증 SQL 생성, `etl_metadata_parser` 테이블 정의서(Excel/CSV) 파서 |
+| `db_schema.py` | DB 스키마 조회·캐시. `db_config.json` 경로 기준 동작 |
+| `db_config.json` | DB 연결 설정(단일). `config_path`로 다른 모듈에서 참조 |
+| `etl_flow_component/` | ETL 리니지 플로우 맵 UI. `frontend/` = React 빌드, `frontend/build` = Streamlit 임베드 경로 |
+| `erd_flow_component/` | DW 설계 ERD UI. 구조는 `etl_flow_component`와 동일 |
+| `documents/architecture/` | 설계 문서. `Plan_ETL.md`, `loadmap.md`, `schema_doc.md` 등 |
+| `documents/sample/` | 샘플 파일 (swagger, txt 등) |
+| `.template_profiles/` | `aetl_template_profile` 사용자 정의 엑셀 프로파일 저장 디렉터리 (루트 기준) |
+| `*.db` (루트) | SQLite: `aetl_metadata.db`(검증/이력), `.aetl_metadata.db`(메타엔진). 경로는 각 모듈 내 상수 |
+| `.schema_cache.json` | `db_schema` 스키마 캐시. `db_config.json`과 같은 디렉터리 |
+
+- **설계/로드맵**: `documents/architecture/` + **Plan_ETL.md**(ETL 플랫폼 장기 계획) 참고.
+- **config_path**: 대부분 `db_config.json` 절대/상대 경로. 실행 시 워킹 디렉터리는 프로젝트 루트 가정.
+
+---
+
 ## 환경변수 (.env)
 
 ```env

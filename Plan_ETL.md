@@ -1,5 +1,7 @@
 # Plan_ETL (Talend/TOS 벤치마킹 ETL 플랫폼 구축안)
 
+> **다른 Agent 세션 참고**: 현재 프로젝트의 **폴더/파일 경로별 역할**은 `CLAUDE.md`의 **「폴더/파일 경로로 역할 파악」** 섹션에서 경로만으로 파악할 수 있습니다.
+
 ## 0) 결론 요약 (현실성 판단)
 
 - **“TOS(=Talend Open Studio) 수준의 전 기능을 1:1로 동일 구현”은 가능은 하지만, 일반적으로 수년/대규모 인력이 필요한 규모**입니다.
@@ -100,7 +102,7 @@
 
 ## 3) (질문 1) 구현한다면 “백엔드 언어” 무엇이 안정적인가?
 
-### 3.1 추천 1순위: Java 또는 Kotlin(JVM)
+### 3.1 추천 1순위: Kotlin(JVM)
 
 - **장점**
   - **JDBC/드라이버/트랜잭션/스레드/메모리 운영 성숙도**가 높음
@@ -108,8 +110,8 @@
   - 대규모 장기 운영(Worker 다수, 멀티테넌트)에서 예측 가능성이 큼
   - Spark/Flink 같은 빅데이터 엔진 연계도 자연스러움
 - **권장 조합**
-  - **Control Plane(API/권한/메타데이터)**: Java/Kotlin + Spring Boot
-  - **Execution Plane(Worker/Runner)**: Java/Kotlin 런타임(컨테이너) + 플러그인 로더
+  - **Control Plane(API/권한/메타데이터)**: Kotlin + Spring Boot
+  - **Execution Plane(Worker/Runner)**: Kotlin 런타임(컨테이너) + 플러그인 로더
 
 ### 3.2 대안: Go(컨트롤 플레인) + JVM(워커)
 
